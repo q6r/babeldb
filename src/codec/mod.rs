@@ -11,7 +11,7 @@ pub mod template_patch;
 pub mod zstd;
 
 use crate::error::{Error, Result};
-use crate::format::{codec_id, param_kind, CodecTag, MAX_UNIT_LEN};
+use crate::format::{CodecTag, MAX_UNIT_LEN, codec_id, param_kind};
 
 pub use template_patch::Template;
 pub use zstd::ZstdDict;
@@ -41,8 +41,16 @@ pub fn required_param(codec: CodecTag, aux_id: u64) -> Option<u8> {
     }
 }
 
-/// Decode `body` into `out` (cleared first).
-pub fn decode(codec: CodecTag, aux_id: u64, body: &[u8], raw_len: u32, deps: Deps<'_>, out: &mut Vec<u8>) -> Result<()> {
+/// Decode `body` into `out` (cleared first). A dependency is only used if its
+/// id equals `aux_id`; otherwise it counts as missing.
+pub fn decode(
+    codec: CodecTag,
+    aux_id: u64,
+    body: &[u8],
+    raw_len: u32,
+    deps: Deps<'_>,
+    out: &mut Vec<u8>,
+) -> Result<()> {
     if raw_len > MAX_UNIT_LEN {
         return Err(Error::format("raw_len exceeds MAX_UNIT_LEN"));
     }
@@ -56,16 +64,23 @@ pub fn decode(codec: CodecTag, aux_id: u64, body: &[u8], raw_len: u32, deps: Dep
             let dict = if aux_id == 0 {
                 None
             } else {
-                Some(deps.zstd_dict.ok_or(Error::MissingDependency { param_id: aux_id })?)
+                let d = deps.zstd_dict.filter(|d| d.id == aux_id);
+                Some(d.ok_or(Error::MissingDependency { param_id: aux_id })?)
             };
             zstd::decode(body, raw_len, dict, out)?
         }
         (codec_id::BABEL_AFFINE, 1) => babel_affine::decode(body, raw_len, out)?,
         (codec_id::TEMPLATE_PATCH, 1) => {
-            let t = deps.template.ok_or(Error::MissingDependency { param_id: aux_id })?;
+            let t = deps.template.filter(|t| t.id == aux_id);
+            let t = t.ok_or(Error::MissingDependency { param_id: aux_id })?;
             template_patch::decode(body, raw_len, t, out)?
         }
-        _ => return Err(Error::UnknownCodec { id: codec.id, version: codec.version }),
+        _ => {
+            return Err(Error::UnknownCodec {
+                id: codec.id,
+                version: codec.version,
+            });
+        }
     }
     if out.len() != raw_len as usize {
         return Err(Error::format(format!(
