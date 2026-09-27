@@ -1,0 +1,42 @@
+[package]
+name = "babeldb"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+description = "Embedded key-value store inspired by the Library of Babel: reversible addressing (BabelPure) vs exact adaptive representations (Adaptive)"
+
+[dependencies]
+blake3 = "1.8.7"
+heed = { version = "0.22.1", optional = true }
+lz4_flex = "0.14.0"
+redb = "4.3.0"
+zstd = "0.14.0"
+
+[features]
+default = []
+# LMDB backend (heed) for the backend comparison.
+lmdb = ["dep:heed"]
+
+[dev-dependencies]
+criterion = "0.8.2"
+num-bigint = "0.5.1"
+proptest = "1.11.0"
+tempfile = "3.27.0"
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_ProcessStatus", "Win32_System_Threading", "Win32_System_JobObjects"] }
+
+[[bench]]
+name = "codec"
+harness = false
+
+[[bench]]
+name = "engine"
+harness = false
+
+[profile.release]
+debug = "line-tables-only"
+
+[profile.bench]
+inherits = "release"
