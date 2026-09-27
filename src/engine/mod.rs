@@ -4,11 +4,20 @@
 //! -> decode -> verify (len + BLAKE3) -> bytes. The hash index is only used
 //! on writes (dedupe candidates), never to find the current version.
 //!
+//! Write path: validate and encode outside the write transaction; inside it,
+//! check the expectation, store or reuse objects (byte-verified dedupe), take
+//! the new references, retire the replaced manifest (history or release),
+//! publish the manifest and commit. Many ops can share one commit
+//! (`write_batch`, `write_batch_each`).
+//!
 //! The public signatures are the contract used by the CLI, benches and tests.
 //! Maintenance/training methods live in `crate::maintenance`, imports in
 //! `crate::ingest` (both as `impl Db` blocks using `ops`).
 
+mod inspect;
 pub mod ops;
+mod read;
+mod write;
 
 use std::ops::Bound;
 use std::path::Path;
@@ -135,9 +144,12 @@ pub struct Inspection {
     /// "inline" | "chunks" | "generated" | "tombstone"
     pub kind: &'static str,
     pub manifest_bytes: u64,
-    /// Sum of envelope sizes (64-byte headers + bodies) of the units referenced.
-    /// Shared objects are counted fully here; see `stats` for the shared total.
+    /// Sum of envelope sizes (64-byte headers + bodies) of the units referenced,
+    /// each distinct object once. Objects shared with other records are counted
+    /// fully here; see `stats` for the shared total.
     pub encoded_bytes: u64,
+    /// One entry per unit in value order (a block repeated inside the value
+    /// appears once per reference, with the same object id).
     pub units: Vec<UnitInfo>,
     pub source: Option<(u64, SourceDescriptor)>,
     /// (generator id, version, name, params length)
@@ -305,47 +317,74 @@ impl<S: Store> Db<S> {
     }
 }
 
-#[allow(unused_variables)]
+/// `Db` is shared between threads: many readers, writers serialized by the store.
+const _: () = {
+    fn assert_send_sync<T: Send + Sync>() {}
+    #[allow(dead_code)]
+    fn db_is_send_sync<S: Store>() {
+        assert_send_sync::<Db<S>>();
+    }
+};
+
+/// Validation shared by every write: keys must be non-empty and at most
+/// `max_key_len` bytes (`InvalidArgument` / `LimitExceeded`), values at most
+/// `max_value_len` bytes (`LimitExceeded`). Deletes only reject empty keys, so
+/// records written under a larger `max_key_len` stay deletable.
 impl<S: Store> Db<S> {
-    /// Durable when it returns (Immediate commit).
+    /// Store `value` under `key`. Values of at most `inline_max` bytes are kept
+    /// inside the manifest; larger ones are split into `block_size` blocks
+    /// stored as objects (deduplicated by byte comparison in Adaptive mode).
+    /// With `keep_history` the replaced manifest moves to `history`; otherwise
+    /// its objects are released. Durable when it returns (Immediate commit).
     pub fn put(&self, key: &[u8], value: &[u8], expect: Expect) -> Result<Revision> {
-        todo!()
+        write::put(self, key, value, expect)
     }
 
     /// Store a record described by a registered generator + params (no objects).
+    /// The output is hashed once (streamed) so whole reads can be verified.
     pub fn put_generated(&self, key: &[u8], generator_id: u16, generator_version: u16, params: &[u8], expect: Expect) -> Result<Revision> {
-        todo!()
+        write::put_generated(self, key, generator_id, generator_version, params, expect)
     }
 
+    /// Current value; `None` for missing keys and tombstones.
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
-        todo!()
+        Ok(read::get_value(self, key, None)?.map(|(_, v)| v))
     }
 
     pub fn get_with_revision(&self, key: &[u8]) -> Result<Option<(Revision, Vec<u8>)>> {
-        todo!()
+        read::get_value(self, key, None)
     }
 
     /// Bytes `[offset, offset+len)` clamped to the value length. `offset >
     /// logical_len` is an `InvalidArgument` error; `offset == logical_len` returns empty.
+    /// Only the blocks intersecting the range are decoded. Range reads of
+    /// generated values are produced directly by the generator and are not
+    /// digest-verified (whole reads are).
     pub fn get_range(&self, key: &[u8], offset: u64, len: u64) -> Result<Option<Vec<u8>>> {
-        todo!()
+        Ok(read::get_value(self, key, Some((offset, len)))?.map(|(_, v)| v))
     }
 
     /// Current (revision, logical_len), tombstones excluded.
     pub fn head(&self, key: &[u8]) -> Result<Option<(Revision, u64)>> {
-        todo!()
+        read::head(self, key)
     }
 
-    /// Returns whether a live record was deleted.
+    /// Returns whether a live record was deleted. A missing key (or tombstone)
+    /// is `Ok(false)` unless `expect` is `Revision(_)`, which then conflicts.
+    /// With `keep_history` the current manifest moves to `history` and a
+    /// tombstone with a new revision is written; otherwise the record is
+    /// removed and its objects released.
     pub fn delete(&self, key: &[u8], expect: Expect) -> Result<bool> {
-        todo!()
+        write::delete(self, key, expect)
     }
 
-    /// Apply every op atomically in one durable commit (group commit).
-    /// Any failed expectation aborts the whole batch. Returns the new revision
-    /// for puts, and `Some(rev)`/`None` for deletes (deleted / nothing to delete).
+    /// Apply every op atomically in one durable commit (group commit), in
+    /// order: a later op sees the effects of earlier ones on the same key.
+    /// Any failed expectation or invalid op aborts the whole batch. Returns the
+    /// new revision for puts, and for deletes `Some(revision of the deleted
+    /// record)` / `None` (nothing to delete).
     pub fn write_batch(&self, ops: &[BatchOp<'_>]) -> Result<Vec<Option<Revision>>> {
-        todo!()
+        write::write_batch(self, ops)
     }
 
     /// Group-commit primitive: apply, in order and in ONE commit with the given
@@ -353,51 +392,63 @@ impl<S: Store> Db<S> {
     /// (or that are invalid) are skipped and reported individually; the others
     /// are still applied. The outer `Err` is reserved for failures that abort the
     /// whole transaction (I/O, backend, integrity).
+    ///
+    /// Values are encoded before the write transaction starts (over several
+    /// threads when the batch is expensive). Per-op results use the same
+    /// convention as `write_batch`. Nothing is committed when no op changes
+    /// anything.
     pub fn write_batch_each(&self, ops: &[BatchOp<'_>], durability: Durability) -> Result<Vec<Result<Option<Revision>>>> {
-        todo!()
+        write::write_batch_each(self, ops, durability)
     }
 
     /// Make every previously committed `Durability::Deferred` transaction
     /// durable (an empty `Immediate` commit).
     pub fn sync(&self) -> Result<()> {
-        todo!()
+        write::sync(self)
     }
 
-    /// Ordered range scan over live records.
+    /// Ordered range scan over live records (tombstones skipped). The backend
+    /// scan stops as soon as `limit` live records are found, so "latest N with
+    /// prefix P" is `ScanOptions::prefix(P).reverse(true).limit(N)`. Values are
+    /// reconstructed and verified like `get`.
     pub fn scan(&self, opts: &ScanOptions) -> Result<Vec<ScanItem>> {
-        todo!()
+        read::scan(self, opts)
     }
 
     /// Retained history of a key, oldest first, plus the current manifest.
     pub fn history(&self, key: &[u8]) -> Result<Vec<HistoryEntry>> {
-        todo!()
+        read::history(self, key)
     }
 
-    /// Value of a key at a specific revision (current or retained history).
+    /// Value of a key at a specific revision (current or retained history);
+    /// `None` if that revision is not retained or is a tombstone.
     pub fn get_at(&self, key: &[u8], revision: Revision) -> Result<Option<Vec<u8>>> {
-        todo!()
+        read::get_at(self, key, revision)
     }
 
-    /// Drop retained history entries, keeping the newest `keep_last` per key.
+    /// Drop retained history entries, keeping the newest `keep_last` per key
+    /// (one key, or every key with `None`), and release their objects.
     /// Returns the number of history entries removed.
     pub fn prune_history(&self, key: Option<&[u8]>, keep_last: usize) -> Result<u64> {
-        todo!()
+        write::prune_history(self, key, keep_last)
     }
 
     pub fn register_source(&self, desc: SourceDescriptor) -> Result<u64> {
-        todo!()
+        write::register_source(self, &desc)
     }
 
     pub fn sources(&self) -> Result<Vec<(u64, SourceDescriptor)>> {
-        todo!()
+        read::sources(self)
     }
 
+    /// Current manifest of a key (tombstones included) with the envelope
+    /// header of every unit. Reads every referenced envelope.
     pub fn inspect(&self, key: &[u8]) -> Result<Option<Inspection>> {
-        todo!()
+        inspect::inspect(self, key)
     }
 
-    /// Full accounting (scans every table).
+    /// Full accounting (scans every table in one snapshot; see `Stats`).
     pub fn stats(&self) -> Result<Stats> {
-        todo!()
+        inspect::stats(self)
     }
 }
