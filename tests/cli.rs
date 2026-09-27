@@ -1140,6 +1140,8 @@ fn sample_stats() -> Stats {
         param_bytes: 0,
         history_bytes: 132,
         source_bytes: 60,
+        meta_bytes: 180,
+        pending_import_bytes: 0,
         per_codec: vec![CodecUsage {
             codec: "RawV1".into(),
             units: 25,
