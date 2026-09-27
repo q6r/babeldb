@@ -56,8 +56,77 @@ Latências p50/p99 de cada linha: `bench-results/compare-round1.txt` e `compare.
 6. **Onde já vencemos**: leituras por chave e "últimas 50" — embarcado 4–30× à frente; via TCP
    ainda 2× à frente do PG com 1 thread.
 
-## Rodada 2 (em andamento)
+## Rodada 2 (27/09/2026, noite)
 
-WAL write-through + commits `Deferred` no redb com checkpoint; group commit no servidor;
-reuso de snapshots de leitura; redução de CPU por operação; dicionário zstd e compactação.
-Os resultados entram aqui, sempre com as mesmas condições.
+Mudanças integradas: WAL próprio com write-through na frente do redb (`Db::open_wal`),
+reuso de snapshots de leitura + pool de handles de leitura no redb, CPU do motor menor e
+dicionário zstd automático, group commit no servidor TCP. Mesmas condições da rodada 1
+(100 000 × 512 B, durabilidade equivalente, 1 repetição, mesma máquina; commit `c9…` do
+harness com as variantes `babel-wal*`). Saída bruta: `bench-results/compare-round2.txt`.
+Nesta rodada os sistemas babeldb rodam as fases de leitura/escrita **depois** de
+`Db::compact` (o harness compacta após a carga; `--no-compact` volta às condições da rodada 1).
+
+Garantia de durabilidade do WAL padrão (`WalSync::WriteThrough`): a mesma do padrão do
+PostgreSQL no Windows (`open_datasync`, `FILE_FLAG_WRITE_THROUGH`) — que, segundo a própria
+documentação do PostgreSQL e o `CreateFile` da Microsoft, **não garante** atravessar o cache
+volátil do disco numa queda de energia. Os modos mais fortes também foram medidos:
+`wal-strict` (`WRITE_THROUGH | NO_BUFFERING`, FUA pedido ao disco) e `wal-flush`
+(`FlushFileBuffers`, a garantia do redb sozinho). Nenhum teste de queda de energia foi feito.
+
+### Comparação justa (cliente/servidor, localhost TCP) — ops/s
+
+| operação | babeldb TCP + WAL (raw) | babeldb TCP + WAL (adaptive) | PostgreSQL | MongoDB |
+|---|---|---|---|---|
+| carga em lote (registros/s) | 46 000 | 55 000 | **87 000** | 40 000 |
+| put durável, 1 cliente | **3 908** | 3 311 | 3 590 | 244 |
+| put durável, 4 clientes | 9 336 | 8 461 | **9 822** | 571 |
+| put durável, 16 clientes | 15 323 | 13 750 | **25 192** | 2 028 |
+| put durável, 64 clientes | **24 910** | 14 930 | 24 628 | 11 494 |
+| get, 1 cliente | **15 429** | 15 038 | 7 828 | 3 745 |
+| get, 4 clientes | **59 778** | 57 377 | 27 915 | 11 410 |
+| get, 16 clientes | 120 497 | **120 449** (dict 127 301) | 54 994 | 21 980 |
+| últimas 50, 1 cliente | 5 599 | **6 816** | 2 860 | 1 678 |
+| últimas 50, 4 clientes | 24 175 | 26 106 (dict 27 389) | 7 366 | 6 566 |
+| últimas 50, 16 clientes | 52 904 | 50 809 (dict **65 281**) | 17 819 | 13 592 |
+
+### Embarcado (dentro do processo, sem rede) — ops/s
+
+| operação | WAL raw | WAL adaptive | WAL estrito (FUA) | WAL flush | redb sem WAL |
+|---|---|---|---|---|---|
+| carga em lote (registros/s) | 58 000 | 69 000 | 53 000 | 50 000 | 26 000 |
+| put durável, 1 thread | 3 915 | 4 987 | 5 618 | 729 | 444 |
+| put durável, 64 threads | 31 070 | 25 625 | **35 516** | 20 695 | 5 382 |
+| get, 16 threads | 1 736 650 | 2 228 670 | 1 375 316 | 1 994 876 | 1 834 271 |
+| últimas 50, 16 threads | 182 999 | 286 273 | 157 609 | 167 945 | 171 542 |
+
+### Espaço — só arquivos de dados (logs excluídos para todos: WAL do babeldb, WAL do PG, journal do Mongo)
+
+| sistema | recém-carregado | após compactação |
+|---|---|---|
+| babeldb + dicionário zstd | 67,4 MB | **31,5 MB** |
+| babeldb adaptive | 67,4 MB | 34,8 MB |
+| babeldb raw | 134,7 MB | 69,6 MB |
+| PostgreSQL (heap + índice) | 62,6 MB | — |
+| MongoDB (storage + índice, snappy) | **32,1 MB** | — |
+
+O WAL do babeldb é um arquivo pré-alocado de 16 MiB (fixo). Os números de espaço desta tabela
+foram obtidos da execução da rodada 2 subtraindo esse arquivo (a partir desta versão o
+harness já reporta dados e WAL separados).
+
+### Placar após a rodada 2
+
+- **Vencemos**: todas as leituras (2–4× o PostgreSQL via TCP; 15–40× embarcado), put durável
+  com 1 e 64 clientes via TCP, todas as escritas embarcadas, espaço compactado (empate com o
+  Mongo, metade do PG).
+- **Perdemos**: carga em lote (55 k/s vs 87 k/s do PG), put durável via TCP com 4 e 16
+  clientes (9,3 k e 15,3 k vs 9,8 k e 25,2 k do PG), escrita concorrente com codec adaptive
+  (a codificação ainda roda na thread única do committer), espaço **sem** compactação.
+
+## Rodada 3 (planejada)
+
+1. Codificar os valores nas threads de quem escreve (TCP workers / threads da aplicação), não
+   na thread do group committer; usar `put_many` no motor; acelerar a carga em lote.
+2. Perfilar o caminho de escrita concorrente do servidor TCP (16 clientes: 15 k/s vs 30 k/s
+   embarcado).
+3. Espaço sem compactação manual: envelope inline compacto (os 64 B por registro pesam em
+   mensagens de ~185 B comprimidas) e compactação/reescrita incremental.

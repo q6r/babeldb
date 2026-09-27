@@ -489,14 +489,16 @@ impl<S: Store> BabelTarget<S> {
         Ok(())
     }
 
+    /// Data files only (the WAL file, like PostgreSQL's WAL and MongoDB's
+    /// journal, is reported separately and excluded from the number).
     fn describe_space(&self, what: &str) -> R<(u64, String)> {
         let s = self.db.stats()?;
-        let alloc = s.file_allocated_bytes().unwrap_or_else(|| s.file_apparent_bytes());
+        let (data, wal) = split_wal(&s.files, |f| f.allocated_bytes.unwrap_or(f.apparent_bytes));
         Ok((
-            alloc,
+            data,
             format!(
-                "{what} (apparent {:.2} MB, engine payload {:.2} MB)",
-                s.file_apparent_bytes() as f64 / 1e6,
+                "{what}: data files allocated, WAL file excluded (+{:.2} MB WAL; engine payload {:.2} MB)",
+                wal as f64 / 1e6,
                 s.payload_bytes() as f64 / 1e6
             ),
         ))
@@ -508,18 +510,26 @@ impl<S: Store> BabelTarget<S> {
     /// once closed). The settled size is the smaller of the two.
     fn describe_compacted(&self, took: Duration) -> R<(u64, String)> {
         let s = self.db.stats()?;
-        let apparent = s.file_apparent_bytes();
-        let settled = s.file_allocated_bytes().map_or(apparent, |a| a.min(apparent));
+        let settled = |f: &babeldb::stats::FileSize| f.allocated_bytes.map_or(f.apparent_bytes, |a| a.min(f.apparent_bytes));
+        let (data, wal) = split_wal(&s.files, settled);
         Ok((
-            settled,
+            data,
             format!(
-                "redb file after Db::compact in {:.2}s: min(apparent, allocated) (allocated while open {:.2} MB, engine payload {:.2} MB)",
+                "data files after Db::compact in {:.2}s: min(apparent, allocated), WAL file excluded (+{:.2} MB WAL; engine payload {:.2} MB)",
                 took.as_secs_f64(),
-                s.file_allocated_bytes().unwrap_or(apparent) as f64 / 1e6,
+                wal as f64 / 1e6,
                 s.payload_bytes() as f64 / 1e6
             ),
         ))
     }
+}
+
+/// (data bytes, WAL bytes) of a store's files, sized by `size`.
+fn split_wal(files: &[babeldb::stats::FileSize], size: impl Fn(&babeldb::stats::FileSize) -> u64) -> (u64, u64) {
+    let is_wal = |f: &babeldb::stats::FileSize| f.path.extension().is_some_and(|e| e == "wal");
+    let data = files.iter().filter(|f| !is_wal(f)).map(&size).sum();
+    let wal = files.iter().filter(|f| is_wal(f)).map(&size).sum();
+    (data, wal)
 }
 
 struct BabelSession<S: Store> {
