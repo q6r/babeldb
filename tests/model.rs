@@ -1601,9 +1601,14 @@ impl<H: Harness> Runner<H> {
                 assert_eq!(gver, 1, "{kctx}: generator version");
                 continue;
             }
+            // `encoded_bytes` counts each distinct object once: a block repeated
+            // inside the value is one shared (deduplicated) object.
             let mut encoded = 0u64;
+            let mut seen_objects = std::collections::HashSet::new();
             for u in &insp.units {
-                encoded += ENVELOPE_HEADER + u64::from(u.body_len);
+                if u.object_id.is_none_or(|id| seen_objects.insert(id)) {
+                    encoded += ENVELOPE_HEADER + u64::from(u.body_len);
+                }
                 match self.mode {
                     Mode::BabelPure => {
                         assert_eq!(
