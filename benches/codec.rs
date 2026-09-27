@@ -11,7 +11,13 @@
 //! - `decode/<codec>/<input>/<size>`: `codec::decode` of an existing body, the
 //!   numbers behind `planner::measured_cost_model`;
 //! - `zstd_ctx/...`: thread-local context reuse versus a fresh context per
-//!   call (`zstd::bulk`).
+//!   call (`zstd::bulk`);
+//! - `s3_512/...`: the benchmark's chat messages (`datasets`, scenario S3,
+//!   512 B), cycling over 1000 distinct messages: the whole Adaptive planner
+//!   without and with a dictionary trained like the automatic one (2000
+//!   messages, 64 KiB), decoding per codec and the BLAKE3 digest that every
+//!   verified read adds. Uses only APIs of format v1 round 1, so the same file
+//!   also builds against the round-1 library for before/after comparisons.
 //!
 //! Quick pass: `cargo bench --bench codec -- --warm-up-time 0.2
 //! --measurement-time 0.5 --output-format bencher`.
@@ -25,6 +31,7 @@ use babeldb::codec::{
     zstd,
 };
 use babeldb::config::{CodecPolicy, Mode};
+use babeldb::datasets::{self, Scenario};
 use babeldb::format::CodecTag;
 use babeldb::planner::Planner;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -243,12 +250,81 @@ fn bench_zstd_contexts(c: &mut Criterion) {
     group.finish();
 }
 
+/// S3 chat messages of 512 B (the benchmark's `--scenario s3 --value-size 512`).
+fn s3_messages(from: u64, n: u64) -> Vec<Vec<u8>> {
+    (from..from + n)
+        .map(|i| datasets::value(Scenario::ChatJson, datasets::DEFAULT_SEED, i, 512))
+        .collect()
+}
+
+/// Mean body size of `f` over `data`, for the printed summary.
+fn mean_len(data: &[Vec<u8>], f: impl Fn(&[u8]) -> usize) -> f64 {
+    data.iter().map(|d| f(d) as f64).sum::<f64>() / data.len() as f64
+}
+
+fn bench_s3_small_values(c: &mut Criterion) {
+    const DICT: u64 = 7;
+    let train = s3_messages(0, 2000);
+    let msgs = s3_messages(10_000, 1000);
+    let n = msgs.len();
+    let dict_bytes = zstd::train_dictionary(&train, 64 * 1024).expect("dictionary training");
+    let dict = Arc::new(ZstdDict::new(DICT, dict_bytes, LEVEL).expect("dictionary"));
+    let plain = Planner::new(Mode::Adaptive, CodecPolicy::default());
+    let with_dict = Planner::new(Mode::Adaptive, CodecPolicy::default()).with_params(Some(dict.clone()), None);
+    println!(
+        "s3_512 mean body bytes: lz4 {:.1}, zstd {:.1}, zstd+dict {:.1}, planner {:.1}, planner+dict {:.1} (dict {} B)",
+        mean_len(&msgs, |d| lz4::encode(d).len()),
+        mean_len(&msgs, |d| zstd::encode(d, LEVEL, None).unwrap().len()),
+        mean_len(&msgs, |d| zstd::encode(d, LEVEL, Some(&dict)).unwrap().len()),
+        mean_len(&msgs, |d| plain.encode_unit(d).body.len()),
+        mean_len(&msgs, |d| with_dict.encode_unit(d).body.len()),
+        dict.bytes().len(),
+    );
+    let mut group = c.benchmark_group("s3_512");
+    group.throughput(Throughput::Elements(1));
+    let mut i = 0usize;
+    let mut next = move || {
+        i = (i + 1) % n;
+        i
+    };
+    group.bench_function("encode/planner", |b| b.iter(|| plain.encode_unit(black_box(&msgs[next()]))));
+    group.bench_function("encode/planner_dict", |b| b.iter(|| with_dict.encode_unit(black_box(&msgs[next()]))));
+    group.bench_function("blake3", |b| b.iter(|| blake3::hash(black_box(&msgs[next()]))));
+    let deps = Deps { zstd_dict: Some(&dict), template: None };
+    let bodies: Vec<(&str, CodecTag, u64, Vec<Vec<u8>>)> = vec![
+        ("raw", CodecTag::RAW_V1, 0, msgs.clone()),
+        ("lz4", CodecTag::LZ4_V1, 0, msgs.iter().map(|d| lz4::encode(d)).collect()),
+        ("zstd", CodecTag::ZSTD_V1, 0, msgs.iter().map(|d| zstd::encode(d, LEVEL, None).unwrap()).collect()),
+        (
+            "zstd_dict",
+            CodecTag::ZSTD_V1,
+            DICT,
+            msgs.iter().map(|d| zstd::encode(d, LEVEL, Some(&dict)).unwrap()).collect(),
+        ),
+    ];
+    let mut out = Vec::with_capacity(1024);
+    for (name, tag, aux, bodies) in &bodies {
+        for (body, data) in bodies.iter().zip(&msgs) {
+            codec::decode(*tag, *aux, body, data.len() as u32, deps, &mut out).expect("roundtrip");
+            assert!(&out == data, "{name}");
+        }
+        group.bench_function(format!("decode/{name}"), |b| {
+            b.iter(|| {
+                let k = next();
+                codec::decode(*tag, *aux, black_box(&bodies[k]), 512, deps, &mut out).unwrap();
+                out.len()
+            })
+        });
+    }
+    group.finish();
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default()
         .warm_up_time(Duration::from_millis(500))
         .measurement_time(Duration::from_secs(2))
         .sample_size(30);
-    targets = bench_encode, bench_decode, bench_zstd_contexts
+    targets = bench_encode, bench_decode, bench_zstd_contexts, bench_s3_small_values
 }
 criterion_main!(benches);

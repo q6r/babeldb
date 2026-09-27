@@ -3,6 +3,12 @@
 //! each op only checks its expectation, stores or reuses objects, allocates a
 //! revision and publishes the manifest. `put`, `delete`, `write_batch` and
 //! `write_batch_each` share the same per-op steps.
+//!
+//! Small values are prepared as their complete Inline manifest (revision
+//! left at 0): inside the transaction the op only writes the revision into
+//! it and stores it, and the record it replaces is inspected without copying
+//! its envelope. Before preparing, each write feeds the automatic dictionary
+//! (`autodict`) and installs a dictionary that finished training.
 
 use std::ops::Bound;
 use std::sync::OnceLock;
@@ -10,6 +16,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use super::ops::{self, PreparedUnit};
+use super::read::inline_revision;
 use super::{BatchOp, Db, Expect, Revision, prefix_successor};
 use crate::chunk;
 use crate::error::{Error, Result};
@@ -21,7 +28,7 @@ use crate::store::{Durability, ReadTxn, Store, Table, WriteTxn};
 
 /// A value encoded outside the write transaction.
 pub(crate) enum PreparedValue {
-    /// Complete envelope, stored inside the manifest.
+    /// Complete Inline manifest with revision 0 (`ops::prepare_inline_manifest`).
     Inline(Vec<u8>),
     /// One unit per `block_size` block, in order.
     Chunks(Vec<PreparedUnit>),
@@ -85,21 +92,34 @@ impl TxnCtx {
 /// Record currently stored under a key, as seen inside the write transaction.
 struct Current {
     raw: Vec<u8>,
-    manifest: Manifest,
+    revision: u64,
+    tombstone: bool,
+    /// Decoded manifest, except for Inline records (which reference no
+    /// object, so only their revision matters here).
+    manifest: Option<Manifest>,
+}
+
+impl Current {
+    /// Revision of the live record (a tombstone counts as absent).
+    fn live_revision(&self) -> Option<Revision> {
+        (!self.tombstone).then_some(self.revision)
+    }
 }
 
 fn load_current<T: ReadTxn + ?Sized>(t: &T, key: &[u8]) -> OpResult<Option<Current>> {
     let Some(raw) = t.get(Table::Records, key)? else {
         return Ok(None);
     };
+    if let Some(revision) = inline_revision(&raw) {
+        return Ok(Some(Current { raw, revision, tombstone: false, manifest: None }));
+    }
     let manifest = Manifest::decode(&raw).map_err(OpError::Skip)?;
-    Ok(Some(Current { raw, manifest }))
+    Ok(Some(Current { revision: manifest.revision, tombstone: manifest.is_tombstone(), manifest: Some(manifest), raw }))
 }
 
-/// Check an optimistic-concurrency condition against the stored manifest.
-/// A tombstone counts as absent.
-pub(crate) fn check_expect(key: &[u8], expect: Expect, current: Option<&Manifest>) -> Result<()> {
-    let actual = current.filter(|m| !m.is_tombstone()).map(|m| m.revision);
+/// Check an optimistic-concurrency condition against the revision of the
+/// live record (None if absent; a tombstone counts as absent).
+fn check_expect_revision(key: &[u8], expect: Expect, actual: Option<Revision>) -> Result<()> {
     let holds = match expect {
         Expect::Any => true,
         Expect::Absent => actual.is_none(),
@@ -146,33 +166,30 @@ fn prepare_threads() -> usize {
     })
 }
 
-/// Encode units, preserving order. When the first units show that the rest
-/// is expensive, the rest is split over scoped threads; the output is the same.
-pub(crate) fn prepare_units(planner: &Planner, inputs: &[&[u8]]) -> Vec<PreparedUnit> {
+/// `f` over `inputs`, preserving order. When the first inputs show that the
+/// rest is expensive, the rest is split over scoped threads; the output is
+/// the same.
+fn map_units<I: Sync, T: Send>(inputs: &[I], f: &(impl Fn(&I) -> T + Sync)) -> Vec<T> {
     let threads = prepare_threads();
     if inputs.len() < PARALLEL_MIN_UNITS || threads < 2 {
-        return encode_all(planner, inputs);
+        return inputs.iter().map(f).collect();
     }
     let started = Instant::now();
     let (probe, rest) = inputs.split_at(PROBE_UNITS);
     let mut out = Vec::with_capacity(inputs.len());
-    out.extend(encode_all(planner, probe));
+    out.extend(probe.iter().map(f));
     let per_unit = started.elapsed() / PROBE_UNITS as u32;
     let estimate = per_unit.saturating_mul(u32::try_from(rest.len()).unwrap_or(u32::MAX));
     if estimate < PARALLEL_MIN_WORK {
-        out.extend(encode_all(planner, rest));
+        out.extend(rest.iter().map(f));
     } else {
-        out.extend(prepare_parallel(planner, rest, threads));
+        out.extend(map_parallel(rest, threads, f));
     }
     out
 }
 
-fn encode_all(planner: &Planner, inputs: &[&[u8]]) -> Vec<PreparedUnit> {
-    inputs.iter().map(|d| ops::prepare_unit(planner, d)).collect()
-}
-
-/// Encode `inputs` with up to `threads` threads (the caller's included).
-pub(crate) fn prepare_parallel(planner: &Planner, inputs: &[&[u8]], threads: usize) -> Vec<PreparedUnit> {
+/// `f` over `inputs` with up to `threads` threads (the caller's included).
+fn map_parallel<I: Sync, T: Send>(inputs: &[I], threads: usize, f: &(impl Fn(&I) -> T + Sync)) -> Vec<T> {
     let per_thread = inputs.len().div_ceil(threads.max(1)).max(1);
     std::thread::scope(|scope| {
         let mut parts = inputs.chunks(per_thread);
@@ -181,12 +198,12 @@ pub(crate) fn prepare_parallel(planner: &Planner, inputs: &[&[u8]], threads: usi
             .map(|part| {
                 let handle = std::thread::Builder::new()
                     .name("babeldb-prepare".into())
-                    .spawn_scoped(scope, move || encode_all(planner, part));
+                    .spawn_scoped(scope, move || part.iter().map(f).collect::<Vec<T>>());
                 (part, handle)
             })
             .collect();
         let mut out = Vec::with_capacity(inputs.len());
-        out.extend(encode_all(planner, first));
+        out.extend(first.iter().map(f));
         for (part, handle) in spawned {
             match handle {
                 Ok(h) => match h.join() {
@@ -194,11 +211,27 @@ pub(crate) fn prepare_parallel(planner: &Planner, inputs: &[&[u8]], threads: usi
                     Err(panic) => std::panic::resume_unwind(panic),
                 },
                 // No thread available: encode this part here.
-                Err(_) => out.extend(encode_all(planner, part)),
+                Err(_) => out.extend(part.iter().map(f)),
             }
         }
         out
     })
+}
+
+/// Encode units, preserving order (spread over threads when expensive).
+pub(crate) fn prepare_units(planner: &Planner, inputs: &[&[u8]]) -> Vec<PreparedUnit> {
+    map_units(inputs, &|d: &&[u8]| ops::prepare_unit(planner, d))
+}
+
+/// One unit of `prepare_values`: a whole small value or one block.
+enum Job<'a> {
+    Inline(&'a [u8]),
+    Block(&'a [u8]),
+}
+
+enum Built {
+    Inline(Vec<u8>),
+    Block(PreparedUnit),
 }
 
 impl<S: Store> Db<S> {
@@ -237,11 +270,11 @@ impl<S: Store> Db<S> {
         }
     }
 
-    /// Encode one value: a single inline unit when `len <= inline_max`,
+    /// Encode one value: a complete Inline manifest when `len <= inline_max`,
     /// otherwise one unit per block.
     pub(crate) fn prepare_value(&self, planner: &Planner, value: &[u8]) -> PreparedValue {
         if value.len() <= self.inline_max as usize {
-            return PreparedValue::Inline(ops::prepare_unit(planner, value).envelope);
+            return PreparedValue::Inline(ops::prepare_inline_manifest(planner, value));
         }
         let blocks: Vec<&[u8]> = chunk::split(value.len(), self.block_size as usize)
             .map(|r| &value[r])
@@ -250,30 +283,44 @@ impl<S: Store> Db<S> {
     }
 
     /// `prepare_value` for many values; every unit of every value is encoded
-    /// in one `prepare_units` call so small values are spread over threads too.
+    /// in one parallel map so small values are spread over threads too.
     pub(crate) fn prepare_values(&self, planner: &Planner, values: &[&[u8]]) -> Vec<PreparedValue> {
         if let [value] = values {
             return vec![self.prepare_value(planner, value)];
         }
         let inline_max = self.inline_max as usize;
         let block_size = self.block_size as usize;
-        let mut inputs: Vec<&[u8]> = Vec::with_capacity(values.len());
+        let mut jobs: Vec<Job<'_>> = Vec::with_capacity(values.len());
         for &value in values {
             if value.len() <= inline_max {
-                inputs.push(value);
+                jobs.push(Job::Inline(value));
             } else {
-                inputs.extend(chunk::split(value.len(), block_size).map(|r| &value[r]));
+                jobs.extend(chunk::split(value.len(), block_size).map(|r| Job::Block(&value[r])));
             }
         }
-        let mut units = prepare_units(planner, &inputs).into_iter();
+        let build = |job: &Job<'_>| match *job {
+            Job::Inline(v) => Built::Inline(ops::prepare_inline_manifest(planner, v)),
+            Job::Block(b) => Built::Block(ops::prepare_unit(planner, b)),
+        };
+        let mut built = map_units(&jobs, &build).into_iter();
         values
             .iter()
             .map(|value| {
                 if value.len() <= inline_max {
-                    let unit = units.next().expect("one prepared unit per inline value");
-                    PreparedValue::Inline(unit.envelope)
+                    match built.next() {
+                        Some(Built::Inline(m)) => PreparedValue::Inline(m),
+                        _ => unreachable!("one prepared manifest per inline value"),
+                    }
                 } else {
-                    PreparedValue::Chunks(units.by_ref().take(value.len().div_ceil(block_size)).collect())
+                    let units = built
+                        .by_ref()
+                        .take(value.len().div_ceil(block_size))
+                        .map(|b| match b {
+                            Built::Block(u) => u,
+                            Built::Inline(_) => unreachable!("blocks of a chunked value"),
+                        })
+                        .collect();
+                    PreparedValue::Chunks(units)
                 }
             })
             .collect()
@@ -283,7 +330,7 @@ impl<S: Store> Db<S> {
     // Per-op steps (inside the write transaction)
     // -----------------------------------------------------------------------
 
-    /// Check the expectation, then publish a new manifest whose body `build`
+    /// Check the expectation, then publish the new manifest that `build`
     /// produces. New references are taken before the replaced manifest is
     /// retired, so shared objects never drop to zero in between.
     fn apply_record<W: WriteTxn + ?Sized>(
@@ -292,14 +339,22 @@ impl<S: Store> Db<S> {
         key: &[u8],
         expect: Expect,
         ctx: &mut TxnCtx,
-        build: impl FnOnce(&mut W, &mut TxnCtx) -> Result<(u64, ManifestBody)>,
+        build: impl FnOnce(&mut W, &mut TxnCtx) -> Result<NewRecord>,
     ) -> OpResult<Revision> {
         let old = load_current(&*w, key)?;
-        check_expect(key, expect, old.as_ref().map(|c| &c.manifest)).map_err(OpError::Skip)?;
-        let (logical_len, body) = build(w, ctx)?;
+        check_expect_revision(key, expect, old.as_ref().and_then(Current::live_revision)).map_err(OpError::Skip)?;
+        let record = build(w, ctx)?;
         let revision = ctx.alloc_revision(&*w)?;
         self.retire(w, key, old, ctx)?;
-        ops::put_manifest(w, key, &Manifest { revision, logical_len, source_id: None, body })?;
+        match record {
+            NewRecord::Encoded(mut manifest) => {
+                ops::set_manifest_revision(&mut manifest, revision);
+                w.put(Table::Records, key, &manifest)?;
+            }
+            NewRecord::Body { logical_len, body } => {
+                ops::put_manifest(w, key, &Manifest { revision, logical_len, source_id: None, body })?;
+            }
+        }
         ctx.puts += 1;
         ctx.dirty = true;
         Ok(revision)
@@ -316,27 +371,24 @@ impl<S: Store> Db<S> {
     ) -> OpResult<Revision> {
         let block_size = self.block_size as usize;
         let dedupe = self.dedupe();
-        self.apply_record(w, key, expect, ctx, |w, ctx| {
-            let body = match prepared {
-                PreparedValue::Inline(envelope) => ManifestBody::Inline(envelope),
-                PreparedValue::Chunks(units) => {
-                    if units.len() != value.len().div_ceil(block_size) {
-                        return Err(Error::InvalidArgument("prepared units do not match the value".into()));
-                    }
-                    let mut refs = Vec::with_capacity(units.len());
-                    for (unit, range) in units.iter().zip(chunk::split(value.len(), block_size)) {
-                        let (object_id, reused) = ops::store_unit(w, unit, &value[range.clone()], dedupe, &self.params)?;
-                        if reused {
-                            ctx.dedupe_hits += 1;
-                        } else {
-                            ctx.objects_written += 1;
-                        }
-                        refs.push(ChunkRef { logical_end: range.end as u64, object_id });
-                    }
-                    ManifestBody::Chunks(refs)
+        self.apply_record(w, key, expect, ctx, |w, ctx| match prepared {
+            PreparedValue::Inline(manifest) => Ok(NewRecord::Encoded(manifest)),
+            PreparedValue::Chunks(units) => {
+                if units.len() != value.len().div_ceil(block_size) {
+                    return Err(Error::InvalidArgument("prepared units do not match the value".into()));
                 }
-            };
-            Ok((value.len() as u64, body))
+                let mut refs = Vec::with_capacity(units.len());
+                for (unit, range) in units.iter().zip(chunk::split(value.len(), block_size)) {
+                    let (object_id, reused) = ops::store_unit(w, unit, &value[range.clone()], dedupe, &self.params)?;
+                    if reused {
+                        ctx.dedupe_hits += 1;
+                    } else {
+                        ctx.objects_written += 1;
+                    }
+                    refs.push(ChunkRef { logical_end: range.end as u64, object_id });
+                }
+                Ok(NewRecord::Body { logical_len: value.len() as u64, body: ManifestBody::Chunks(refs) })
+            }
         })
     }
 
@@ -349,11 +401,11 @@ impl<S: Store> Db<S> {
         ctx: &mut TxnCtx,
     ) -> OpResult<Option<Revision>> {
         let old = load_current(&*w, key)?;
-        check_expect(key, expect, old.as_ref().map(|c| &c.manifest)).map_err(OpError::Skip)?;
-        let Some(old) = old.filter(|c| !c.manifest.is_tombstone()) else {
+        check_expect_revision(key, expect, old.as_ref().and_then(Current::live_revision)).map_err(OpError::Skip)?;
+        let Some(old) = old.filter(|c| !c.tombstone) else {
             return Ok(None);
         };
-        let deleted = old.manifest.revision;
+        let deleted = old.revision;
         if self.cfg.keep_history {
             let revision = ctx.alloc_revision(&*w)?;
             w.put(Table::History, &format::history_key(key, deleted), &old.raw)?;
@@ -361,7 +413,9 @@ impl<S: Store> Db<S> {
             ops::put_manifest(w, key, &tombstone)?;
         } else {
             w.remove(Table::Records, key)?;
-            ctx.removed.extend(ops::release_manifest(w, &old.manifest)?);
+            if let Some(m) = &old.manifest {
+                ctx.removed.extend(ops::release_manifest(w, m)?);
+            }
         }
         ctx.deletes += 1;
         ctx.dirty = true;
@@ -381,9 +435,11 @@ impl<S: Store> Db<S> {
             return Ok(());
         };
         if self.cfg.keep_history {
-            w.put(Table::History, &format::history_key(key, old.manifest.revision), &old.raw)
+            w.put(Table::History, &format::history_key(key, old.revision), &old.raw)
         } else {
-            ctx.removed.extend(ops::release_manifest(w, &old.manifest)?);
+            if let Some(m) = &old.manifest {
+                ctx.removed.extend(ops::release_manifest(w, m)?);
+            }
             Ok(())
         }
     }
@@ -412,6 +468,15 @@ impl<S: Store> Db<S> {
     }
 }
 
+/// The manifest an op publishes, before its revision is allocated.
+enum NewRecord {
+    /// Encoded manifest with revision 0 (Inline values, prepared outside the
+    /// transaction).
+    Encoded(Vec<u8>),
+    /// Body to encode once the revision is known.
+    Body { logical_len: u64, body: ManifestBody },
+}
+
 // ---------------------------------------------------------------------------
 // Entry points (called by the public methods in `engine/mod.rs`)
 // ---------------------------------------------------------------------------
@@ -419,6 +484,7 @@ impl<S: Store> Db<S> {
 pub(super) fn put<S: Store>(db: &Db<S>, key: &[u8], value: &[u8], expect: Expect) -> Result<Revision> {
     db.check_key(key)?;
     db.check_value_len(value.len() as u64)?;
+    db.auto_dictionary_step(&[value]);
     let prepared = db.prepare_value(&db.planner(), value);
     let mut w = db.store.begin_write()?;
     let mut ctx = TxnCtx::default();
@@ -454,7 +520,7 @@ pub(super) fn put_generated<S: Store>(
     let revision = db
         .apply_record(&mut w, key, expect, &mut ctx, |_, _| {
             let body = ManifestBody::Generated { generator_id, generator_version, params: params.to_vec(), digest };
-            Ok((len, body))
+            Ok(NewRecord::Body { logical_len: len, body })
         })
         .map_err(OpError::into_error)?;
     db.commit_txn(w, ctx, Durability::Immediate)?;
@@ -512,9 +578,9 @@ pub(super) fn write_batch<S: Store>(db: &Db<S>, batch: &[BatchOp<'_>]) -> Result
     if batch.is_empty() {
         return Ok(Vec::new());
     }
-    let mut prepared = db
-        .prepare_values(&db.planner(), &valid_put_values(batch, |_| true))
-        .into_iter();
+    let values = valid_put_values(batch, |_| true);
+    db.auto_dictionary_step(&values);
+    let mut prepared = db.prepare_values(&db.planner(), &values).into_iter();
     let mut w = db.store.begin_write()?;
     let mut ctx = TxnCtx::default();
     let mut results = Vec::with_capacity(batch.len());
@@ -544,6 +610,7 @@ pub(super) fn write_batch_each<S: Store>(
         return Ok(checks.into_iter().map(|c| c.map(|()| None)).collect());
     }
     let values = valid_put_values(batch, |i| checks[i].is_ok());
+    db.auto_dictionary_step(&values);
     let mut prepared = db.prepare_values(&db.planner(), &values).into_iter();
     let mut w = db.store.begin_write()?;
     let mut ctx = TxnCtx::default();
@@ -632,6 +699,19 @@ mod tests {
             && a.iter().zip(b).all(|(x, y)| (x.digest, x.raw_len, &x.envelope) == (y.digest, y.raw_len, &y.envelope))
     }
 
+    fn encode_all(planner: &Planner, inputs: &[&[u8]]) -> Vec<PreparedUnit> {
+        inputs.iter().map(|d| ops::prepare_unit(planner, d)).collect()
+    }
+
+    fn prepare_parallel(planner: &Planner, inputs: &[&[u8]], threads: usize) -> Vec<PreparedUnit> {
+        map_parallel(inputs, threads, &|d: &&[u8]| ops::prepare_unit(planner, d))
+    }
+
+    /// The expectation rule on a manifest (a tombstone counts as absent).
+    fn check_expect(key: &[u8], expect: Expect, current: Option<&Manifest>) -> Result<()> {
+        check_expect_revision(key, expect, current.filter(|m| !m.is_tombstone()).map(|m| m.revision))
+    }
+
     #[test]
     fn parallel_preparation_matches_sequential() {
         let planner = Planner::new(Mode::Adaptive, CodecPolicy::raw_only());
@@ -646,6 +726,25 @@ mod tests {
         assert!(prepare_parallel(&planner, &[], 4).is_empty());
         assert!(same(&prepare_units(&planner, &inputs), &sequential));
         assert!(same(&prepare_units(&planner, &inputs[..3]), &sequential[..3]));
+    }
+
+    #[test]
+    fn prepared_values_match_one_by_one_preparation() {
+        let db = Db::with_store(MemStore::new(), crate::config::Config { block_size: 512, inline_max: 64, ..crate::config::Config::adaptive() }).unwrap();
+        let planner = db.planner();
+        let data: Vec<Vec<u8>> = (0..40usize)
+            .map(|i| (0..(i * 97) % 1500).map(|j| ((i * 7 + j / 3) % 251) as u8).collect())
+            .collect();
+        let values: Vec<&[u8]> = data.iter().map(Vec::as_slice).collect();
+        let batch = db.prepare_values(&planner, &values);
+        assert_eq!(batch.len(), values.len());
+        for (p, v) in batch.iter().zip(&values) {
+            match (p, db.prepare_value(&planner, v)) {
+                (PreparedValue::Inline(a), PreparedValue::Inline(b)) => assert_eq!(a, &b),
+                (PreparedValue::Chunks(a), PreparedValue::Chunks(b)) => assert!(same(a, &b)),
+                _ => panic!("value of {} bytes prepared differently", v.len()),
+            }
+        }
     }
 
     #[test]

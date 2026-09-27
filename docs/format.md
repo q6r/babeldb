@@ -314,7 +314,9 @@ Corpos:
   do param `aux_id` (kind `ZSTD_DICT`), carregados em modo automático
   (começando pelo magic `0xEC30A437`: dicionário formatado; senão, conteúdo
   bruto). A dependência é identificada só por `aux_id`; o `Dictionary_ID` do
-  frame, se houver, é informativo. Ex.: `28b52ffd 20 03 190000 616263` → `abc`.
+  frame, se houver, é informativo (desde a rodada 2 os escritores o omitem,
+  economizando 4 bytes por corpo; leitores aceitam as duas formas). Ex.:
+  `28b52ffd 20 03 190000 616263` → `abc`.
 - **BabelAffineV1** — bijeção afim sobre inteiros de `n = raw_len` bytes:
 
   ```text

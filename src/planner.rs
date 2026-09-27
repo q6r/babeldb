@@ -1,17 +1,33 @@
 //! Representation selector. BabelPure always uses `BabelAffineV1`. Adaptive
-//! evaluates a small family of bounded-work candidates and keeps the smallest
-//! serialized body that passes the decode-cost policy and an exact roundtrip;
-//! otherwise it falls back to `RawV1` and records the fallback.
+//! evaluates a small family of bounded-work candidates and keeps the one with
+//! the best size/decode-speed score that passes the decode-cost policy and an
+//! exact roundtrip; otherwise it falls back to `RawV1` and records the fallback.
 //!
 //! Adaptive candidates, in tie-break order (cheaper decode first): Raw, Repeat,
 //! ArithmeticU64, LZ4, TemplatePatch (active template), Zstd, Zstd with the
 //! active dictionary. The envelope costs the same 64 bytes for every codec and
-//! installed dependencies are already paid for, so the smallest body wins.
+//! installed dependencies are already paid for, so candidates are compared on
+//! `body_len + decode_weight_bytes_per_us * estimated_decode_us` (the estimate
+//! comes from the policy's measured cost model; weight 0 = smallest body). A
+//! candidate must also be strictly smaller than the input.
 //!
-//! Every chosen encoding is decoded again (`codec::decode` with the planner's
-//! deps) and compared with the input before it is returned; a mismatch returns
-//! `RawV1` and increments `roundtrip_failures`. `RawV1` itself is the input and
-//! needs no check.
+//! Work bounds, none of which changes what can be decoded:
+//! - the framed codecs (LZ4, Zstd) are skipped once a recipe produced a body
+//!   of at most 8 bytes, and for inputs shorter than `MIN_COMPRESS_LEN`;
+//! - `RepeatV1` looks for motifs of at most a quarter of inputs of 64 bytes
+//!   or more (4 KiB at most), so its search ends early on non-periodic data;
+//! - with an active dictionary, inputs of at most 16 KiB try it before plain
+//!   Zstd, and plain Zstd is skipped when the dictionary already shrank the
+//!   input to at most 60 % (it almost never does better on such inputs);
+//! - when LZ4 found nothing to shrink and the order-0 entropy of the input
+//!   leaves no room either (uniform-looking bytes: random, encrypted, already
+//!   compressed), neither Zstd variant is tried.
+//!
+//! Candidate bodies are built in per-thread scratch buffers; only the chosen
+//! body is handed out. Every chosen encoding other than `RawV1` is decoded
+//! again (`codec::decode` with the planner's deps) and compared with the input
+//! before it is used; a mismatch uses `RawV1` and increments
+//! `roundtrip_failures`. `RawV1` is the input itself and needs no check.
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -20,21 +36,33 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::codec::{self, Deps, Encoded, Template, ZstdDict};
 use crate::config::{CodecPolicy, DecodeCostModel, Mode};
 use crate::error::{Error, Result};
-use crate::format::{CodecTag, MAX_UNIT_LEN, codec_id};
+use crate::format::{CodecTag, MAX_UNIT_LEN};
 
 /// Inputs shorter than this skip the general-purpose compressors (LZ4, Zstd,
 /// dictionary, template): their framing rarely pays off below it.
 pub const MIN_COMPRESS_LEN: usize = 32;
 /// Longest motif `RepeatV1` looks for.
 pub const MAX_REPEAT_PERIOD: usize = 4096;
+/// From this input size on, `RepeatV1` only looks for motifs of at most a
+/// quarter of the input (at least four repetitions): its search stops
+/// after that many bytes of non-periodic input, and a longer motif saves only
+/// a few bytes over what LZ4 makes of two or three repetitions.
+const REPEAT_QUARTER_FROM: usize = 64;
 /// Once a body this small exists, LZ4 and Zstd (whose block/frame framing
 /// alone is larger) are not tried.
 const FRAMED_MIN_BODY: usize = 8;
+/// Inputs up to this size try the active dictionary before plain Zstd.
+const DICT_FIRST_MAX_LEN: usize = 16 * 1024;
+/// Plain Zstd is skipped when the dictionary body is at most this fraction
+/// of such an input.
+const DICT_DECISIVE_RATIO: f64 = 0.6;
+/// Bytes sampled (evenly strided) to estimate the order-0 entropy.
+const ENTROPY_SAMPLE: usize = 4096;
 /// Bookkeeping bytes charged per installed dependency in `projected_net_gain`.
 pub const PARAM_OVERHEAD_BYTES: i64 = 64;
 /// Param id used for dependencies built only to evaluate training.
 const EVAL_PARAM_ID: u64 = u64::MAX;
-/// Verification scratch kept per thread between calls.
+/// Scratch kept per thread between calls (larger buffers are released).
 const SCRATCH_KEEP_BYTES: usize = 2 << 20;
 
 /// Counters per codec (indexed by position in `CodecTag::ALL_V1`).
@@ -68,14 +96,14 @@ enum Candidate {
 
 impl Candidate {
     /// Evaluation order: recipes, then the template (which can beat framed
-    /// codecs on tiny bodies), then LZ4 and Zstd.
+    /// codecs on tiny bodies), LZ4, then the dictionary before plain Zstd.
     const EVAL_ORDER: [Candidate; 6] = [
         Candidate::Repeat,
         Candidate::Arith,
         Candidate::Template,
         Candidate::Lz4,
-        Candidate::Zstd,
         Candidate::ZstdDict,
+        Candidate::Zstd,
     ];
 
     fn codec(self) -> CodecTag {
@@ -93,13 +121,120 @@ impl Candidate {
         matches!(self, Candidate::Lz4 | Candidate::Zstd | Candidate::ZstdDict)
     }
 
+    fn zstd(self) -> bool {
+        matches!(self, Candidate::Zstd | Candidate::ZstdDict)
+    }
+
     fn bit(self) -> u8 {
         1 << self as u8
     }
 }
 
+/// Per-thread buffers: one per framed candidate (so the winner is never
+/// overwritten by a later candidate) and one for the roundtrip check.
+struct Scratch {
+    lz4: Vec<u8>,
+    zstd: Vec<u8>,
+    dict: Vec<u8>,
+    check: Vec<u8>,
+}
+
+impl Scratch {
+    const fn new() -> Scratch {
+        Scratch {
+            lz4: Vec::new(),
+            zstd: Vec::new(),
+            dict: Vec::new(),
+            check: Vec::new(),
+        }
+    }
+
+    fn trim(&mut self) {
+        for buf in [&mut self.lz4, &mut self.zstd, &mut self.dict, &mut self.check] {
+            if buf.capacity() > SCRATCH_KEEP_BYTES {
+                *buf = Vec::new();
+            }
+        }
+    }
+}
+
 thread_local! {
-    static SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    static SCRATCH: RefCell<Scratch> = const { RefCell::new(Scratch::new()) };
+}
+
+/// Run `f` with this thread's scratch buffers (fresh ones if they are busy
+/// or unavailable, e.g. during thread teardown).
+fn with_scratch<R>(f: impl FnOnce(&mut Scratch) -> R) -> R {
+    let mut f = Some(f);
+    let mut out = None;
+    let _ = SCRATCH.try_with(|cell| {
+        if let Ok(mut s) = cell.try_borrow_mut()
+            && let Some(f) = f.take()
+        {
+            out = Some(f(&mut s));
+            s.trim();
+        }
+    });
+    match (out, f) {
+        (Some(r), _) => r,
+        (None, Some(f)) => f(&mut Scratch::new()),
+        // `f` ran but the scratch access unwound: unreachable.
+        (None, None) => unreachable!("scratch closure consumed without a result"),
+    }
+}
+
+/// Where the chosen body lives.
+enum Body {
+    /// Built by a recipe or the template encoder.
+    Owned(Vec<u8>),
+    Lz4,
+    Zstd,
+    ZstdDict,
+}
+
+impl Body {
+    fn slice<'a>(&'a self, s: &'a Scratch) -> &'a [u8] {
+        match self {
+            Body::Owned(b) => b,
+            Body::Lz4 => &s.lz4,
+            Body::Zstd => &s.zstd,
+            Body::ZstdDict => &s.dict,
+        }
+    }
+}
+
+/// Longest `RepeatV1` motif looked for in an input of `n` bytes.
+fn repeat_period_limit(n: usize) -> usize {
+    if n >= REPEAT_QUARTER_FROM { MAX_REPEAT_PERIOD.min(n / 4) } else { MAX_REPEAT_PERIOD }
+}
+
+/// Lower bound, in bytes, of what an order-0 entropy coder (Zstd's literal
+/// stage) could make of `data` without matches, plus about half a byte per
+/// distinct byte for the table. Large inputs are estimated on an evenly
+/// strided sample. At least `data.len()` means Zstd cannot gain from the
+/// byte distribution alone.
+fn entropy_floor(data: &[u8]) -> usize {
+    let n = data.len();
+    let step = (n / ENTROPY_SAMPLE).max(1);
+    let mut counts = [0u32; 256];
+    let mut total = 0u32;
+    for &b in data.iter().step_by(step) {
+        counts[usize::from(b)] += 1;
+        total += 1;
+    }
+    if total == 0 {
+        return 0;
+    }
+    let t = f64::from(total);
+    let (mut bits, mut distinct) = (0.0f64, 0usize);
+    for &c in &counts {
+        if c > 0 {
+            let p = f64::from(c) / t;
+            bits -= p * p.log2();
+            distinct += 1;
+        }
+    }
+    (n as f64 * bits / 8.0 + distinct as f64 / 2.0) as usize
 }
 
 pub struct Planner {
@@ -152,38 +287,63 @@ impl Planner {
     /// Units longer than `MAX_UNIT_LEN` cannot be checked by `codec::decode`:
     /// BabelPure then returns the seed unchecked and Adaptive returns `RawV1`.
     pub fn encode_unit(&self, data: &[u8]) -> Encoded {
+        self.encode_unit_with(data, |codec, aux_id, body| Encoded {
+            codec,
+            aux_id,
+            body: body.to_vec(),
+        })
+    }
+
+    /// `encode_unit`, handing the chosen `(codec, aux_id, body)` to `emit`
+    /// instead of returning an owned body: the body is borrowed from the
+    /// input (`RawV1`) or from the planner's scratch buffers, so the caller
+    /// can write it straight into an envelope. Statistics are the same.
+    pub fn encode_unit_with<R>(&self, data: &[u8], emit: impl FnOnce(CodecTag, u64, &[u8]) -> R) -> R {
         let oversized = data.len() > MAX_UNIT_LEN as usize;
-        let enc = match self.mode {
+        match self.mode {
             Mode::BabelPure => {
-                let enc = Encoded {
-                    codec: CodecTag::BABEL_AFFINE_V1,
-                    aux_id: 0,
-                    body: codec::babel_affine::encode(data),
-                };
-                if oversized {
-                    enc
+                let seed = codec::babel_affine::encode(data);
+                let ok = oversized
+                    || with_scratch(|s| self.roundtrip_ok(CodecTag::BABEL_AFFINE_V1, 0, &seed, data, &mut s.check));
+                if ok {
+                    self.record(CodecTag::BABEL_AFFINE_V1);
+                    emit(CodecTag::BABEL_AFFINE_V1, 0, &seed)
                 } else {
-                    self.verified_or_raw(enc, data)
+                    self.stats.roundtrip_failures.fetch_add(1, Ordering::Relaxed);
+                    self.raw(data, emit)
                 }
             }
-            Mode::Adaptive if oversized => raw(data),
+            Mode::Adaptive if oversized => self.raw(data, emit),
             Mode::Adaptive => {
-                let (kind, body) = self.select(data);
-                match body {
-                    Some(body) => {
-                        let enc = Encoded {
-                            codec: kind.codec(),
-                            aux_id: self.aux_id(kind),
-                            body,
-                        };
-                        self.verified_or_raw(enc, data)
+                let mut emit = Some(emit);
+                let chosen = with_scratch(|s| {
+                    let (kind, body) = self.select(data, s);
+                    let body = body?;
+                    let codec = kind.codec();
+                    let aux_id = self.aux_id(kind);
+                    let mut check = std::mem::take(&mut s.check);
+                    let ok = self.roundtrip_ok(codec, aux_id, body.slice(s), data, &mut check);
+                    s.check = check;
+                    if !ok {
+                        self.stats.roundtrip_failures.fetch_add(1, Ordering::Relaxed);
+                        return None;
                     }
-                    None => raw(data),
+                    self.record(codec);
+                    let emit = emit.take()?;
+                    Some(emit(codec, aux_id, body.slice(s)))
+                });
+                match (chosen, emit) {
+                    (Some(r), _) => r,
+                    (None, Some(emit)) => self.raw(data, emit),
+                    (None, None) => unreachable!("emit consumed without a result"),
                 }
             }
-        };
-        self.record(enc.codec);
-        enc
+        }
+    }
+
+    fn raw<R>(&self, data: &[u8], emit: impl FnOnce(CodecTag, u64, &[u8]) -> R) -> R {
+        self.record(CodecTag::RAW_V1);
+        emit(CodecTag::RAW_V1, 0, data)
     }
 
     /// Deps needed to decode what this planner produced.
@@ -232,46 +392,95 @@ impl Planner {
         }
     }
 
-    /// Body of `kind` for `data`, if the codec applies.
-    fn try_candidate(&self, kind: Candidate, data: &[u8]) -> Option<Vec<u8>> {
+    /// Size plus the decode-time penalty of a body of `len` bytes for `n` input bytes.
+    fn score(&self, kind: Candidate, len: usize, n: usize) -> f64 {
+        let w = self.policy.decode_weight_bytes_per_us;
+        let penalty = if w > 0.0 {
+            let est = self.policy.cost_model.estimate_ns(kind.codec().id, n).unwrap_or(0.0);
+            w * est / 1000.0
+        } else {
+            0.0
+        };
+        len as f64 + penalty
+    }
+
+    /// Body of `kind` for `data`, if the codec applies (framed codecs write
+    /// into their scratch buffer).
+    fn try_candidate(&self, kind: Candidate, data: &[u8], s: &mut Scratch) -> Option<Body> {
         match kind {
             Candidate::Raw => None,
-            Candidate::Repeat => codec::repeat::recognize(data, MAX_REPEAT_PERIOD),
-            Candidate::Arith => codec::arithmetic::recognize(data),
-            Candidate::Lz4 => Some(codec::lz4::encode(data)),
-            Candidate::Template => codec::template_patch::encode(data, self.template.as_deref()?),
-            Candidate::Zstd => codec::zstd::encode(data, self.policy.zstd_level, None).ok(),
+            Candidate::Repeat => codec::repeat::recognize(data, repeat_period_limit(data.len())).map(Body::Owned),
+            Candidate::Arith => codec::arithmetic::recognize(data).map(Body::Owned),
+            Candidate::Template => {
+                codec::template_patch::encode(data, self.template.as_deref()?).map(Body::Owned)
+            }
+            Candidate::Lz4 => {
+                codec::lz4::encode_into(data, &mut s.lz4);
+                Some(Body::Lz4)
+            }
+            Candidate::Zstd => codec::zstd::encode_into(data, self.policy.zstd_level, None, &mut s.zstd)
+                .ok()
+                .map(|()| Body::Zstd),
             Candidate::ZstdDict => {
                 let d = self.dict.as_deref()?;
-                codec::zstd::encode(data, d.level(), Some(d)).ok()
+                codec::zstd::encode_into(data, d.level(), Some(d), &mut s.dict)
+                    .ok()
+                    .map(|()| Body::ZstdDict)
             }
         }
     }
 
-    /// Smallest applicable body (None = Raw), counting a budget fallback when
-    /// the budget left only Raw although a skipped codec would have been smaller.
-    fn select(&self, data: &[u8]) -> (Candidate, Option<Vec<u8>>) {
+    /// Best applicable body (None = Raw), counting a budget fallback when the
+    /// budget left only Raw although a skipped codec would have been smaller.
+    fn select(&self, data: &[u8], s: &mut Scratch) -> (Candidate, Option<Body>) {
         let n = data.len();
-        let mut best: Option<(Candidate, Vec<u8>)> = None;
+        let mut best: Option<(Candidate, Body)> = None;
+        let (mut best_len, mut best_score) = (n, self.score(Candidate::Raw, n, n));
         let mut skipped = 0u8;
+        let mut lz4_len: Option<usize> = None;
+        let mut dict_len: Option<usize> = None;
+        let mut flat: Option<bool> = None;
         for kind in Candidate::EVAL_ORDER {
             if !self.enabled(kind, n) {
                 continue;
             }
-            let (best_kind, best_len) = best
-                .as_ref()
-                .map_or((Candidate::Raw, n), |(k, b)| (*k, b.len()));
             if kind.framed() && best_len <= FRAMED_MIN_BODY {
+                continue;
+            }
+            if kind == Candidate::Zstd
+                && n <= DICT_FIRST_MAX_LEN
+                && dict_len.is_some_and(|l| l as f64 <= DICT_DECISIVE_RATIO * n as f64)
+            {
+                continue;
+            }
+            if kind.zstd()
+                && lz4_len.is_some_and(|l| l >= n)
+                && *flat.get_or_insert_with(|| entropy_floor(data) >= n)
+            {
                 continue;
             }
             if !self.within_budget(kind, n) {
                 skipped |= kind.bit();
                 continue;
             }
-            if let Some(body) = self.try_candidate(kind, data)
-                && (body.len(), kind) < (best_len, best_kind)
-            {
+            let Some(body) = self.try_candidate(kind, data, s) else {
+                continue;
+            };
+            let len = body.slice(s).len();
+            match kind {
+                Candidate::Lz4 => lz4_len = Some(len),
+                Candidate::ZstdDict => dict_len = Some(len),
+                _ => {}
+            }
+            if len >= n {
+                continue;
+            }
+            let score = self.score(kind, len, n);
+            let best_kind = best.as_ref().map_or(Candidate::Raw, |(k, _)| *k);
+            if score < best_score || (score == best_score && kind < best_kind) {
                 best = Some((kind, body));
+                best_len = len;
+                best_score = score;
             }
         }
         match best {
@@ -280,7 +489,7 @@ impl Planner {
                 if skipped != 0
                     && Candidate::EVAL_ORDER.iter().any(|&k| {
                         skipped & k.bit() != 0
-                            && self.try_candidate(k, data).is_some_and(|b| b.len() < n)
+                            && self.try_candidate(k, data, s).is_some_and(|b| b.slice(s).len() < n)
                     })
                 {
                     self.stats.budget_fallbacks.fetch_add(1, Ordering::Relaxed);
@@ -295,43 +504,20 @@ impl Planner {
     fn best_body_len(&self, data: &[u8]) -> usize {
         match self.mode {
             Mode::BabelPure => data.len(),
-            Mode::Adaptive => self.select(data).1.map_or(data.len(), |b| b.len()),
+            Mode::Adaptive if data.len() > MAX_UNIT_LEN as usize => data.len(),
+            Mode::Adaptive => with_scratch(|s| match self.select(data, s) {
+                (_, Some(body)) => body.slice(s).len(),
+                (_, None) => data.len(),
+            }),
         }
     }
 
-    fn verified_or_raw(&self, enc: Encoded, data: &[u8]) -> Encoded {
-        if self.roundtrip_ok(&enc, data) {
-            enc
-        } else {
-            self.stats
-                .roundtrip_failures
-                .fetch_add(1, Ordering::Relaxed);
-            raw(data)
-        }
-    }
-
-    /// Decode `enc` into a per-thread scratch buffer and compare with `data`.
-    fn roundtrip_ok(&self, enc: &Encoded, data: &[u8]) -> bool {
+    /// Decode `body` into `buf` and compare with `data`.
+    fn roundtrip_ok(&self, codec: CodecTag, aux_id: u64, body: &[u8], data: &[u8], buf: &mut Vec<u8>) -> bool {
         let Ok(raw_len) = u32::try_from(data.len()) else {
             return false;
         };
-        let deps = self.deps();
-        let check = |buf: &mut Vec<u8>| {
-            codec::decode(enc.codec, enc.aux_id, &enc.body, raw_len, deps, buf).is_ok()
-                && buf.as_slice() == data
-        };
-        SCRATCH
-            .try_with(|cell| match cell.try_borrow_mut() {
-                Ok(mut buf) => {
-                    let ok = check(&mut buf);
-                    if buf.capacity() > SCRATCH_KEEP_BYTES {
-                        *buf = Vec::new();
-                    }
-                    ok
-                }
-                Err(_) => check(&mut Vec::new()),
-            })
-            .unwrap_or_else(|_| check(&mut Vec::new()))
+        codec::decode(codec, aux_id, body, raw_len, self.deps(), buf).is_ok() && buf.as_slice() == data
     }
 
     fn record(&self, codec: CodecTag) {
@@ -342,6 +528,16 @@ impl Planner {
 
     pub fn stats(&self) -> &PlannerStats {
         &self.stats
+    }
+
+    /// Add the counters of `other` (a planner this one replaces) to this one.
+    pub fn carry_stats_from(&self, other: &Planner) {
+        let (to, from) = (&self.stats, &other.stats);
+        for (t, f) in to.chosen.iter().zip(from.chosen.iter()) {
+            t.fetch_add(f.load(Ordering::Relaxed), Ordering::Relaxed);
+        }
+        to.budget_fallbacks.fetch_add(from.budget_fallbacks.load(Ordering::Relaxed), Ordering::Relaxed);
+        to.roundtrip_failures.fetch_add(from.roundtrip_failures.load(Ordering::Relaxed), Ordering::Relaxed);
     }
 
     pub fn snapshot(&self) -> PlannerSnapshot {
@@ -357,20 +553,10 @@ impl Planner {
     }
 }
 
-fn raw(data: &[u8]) -> Encoded {
-    Encoded {
-        codec: CodecTag::RAW_V1,
-        aux_id: 0,
-        body: codec::raw::encode(data),
-    }
-}
-
-/// Decode-cost estimates measured with `benches/codec.rs`.
-///
-/// Empty until measured (see the report of the codec work).
+/// Decode-cost estimates measured with `benches/codec.rs` (see
+/// `DecodeCostModel::measured`); the default policy uses them.
 pub fn measured_cost_model() -> DecodeCostModel {
-    let _ = codec_id::RAW;
-    DecodeCostModel::default()
+    DecodeCostModel::measured()
 }
 
 /// Result of evaluating a shared dependency (dictionary or template) on
@@ -574,6 +760,7 @@ pub fn train_template(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::format::codec_id;
 
     #[test]
     fn split_is_deterministic_and_balanced() {
@@ -634,5 +821,121 @@ mod tests {
         let unrestricted = Planner::new(Mode::Adaptive, CodecPolicy::default());
         assert_ne!(unrestricted.encode_unit(&data).codec, CodecTag::RAW_V1);
         assert_eq!(unrestricted.snapshot().budget_fallbacks, 0);
+    }
+
+    /// Chat-like text whose LZ4 and Zstd bodies differ by a known amount.
+    fn text(n: usize, seed: u64) -> Vec<u8> {
+        let words = ["deploy", "ok", "thanks", "see", "you", "prod", "is", "slow", "why", "lol"];
+        let mut s = seed;
+        let mut out = Vec::new();
+        while out.len() < n {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            out.extend_from_slice(words[(s >> 33) as usize % words.len()].as_bytes());
+            out.push(if s & 1 == 0 { b' ' } else { b'\n' });
+        }
+        out.truncate(n);
+        out
+    }
+
+    #[test]
+    fn decode_weight_trades_size_for_speed() {
+        let data = text(2048, 7);
+        let sizes = Planner::new(Mode::Adaptive, CodecPolicy { decode_weight_bytes_per_us: 0.0, ..CodecPolicy::default() });
+        let smallest = sizes.encode_unit(&data);
+        assert_eq!(smallest.codec, CodecTag::ZSTD_V1, "zstd is the smallest body here");
+        let lz4 = codec::lz4::encode(&data).len();
+        assert!(lz4 < data.len() && smallest.body.len() < lz4);
+        // A weight that makes Zstd's extra decode time worth more than the
+        // bytes it saves picks LZ4; a small weight keeps Zstd.
+        let model = DecodeCostModel::measured();
+        let extra_us = (model.estimate_ns(codec_id::ZSTD, data.len()).unwrap()
+            - model.estimate_ns(codec_id::LZ4, data.len()).unwrap())
+            / 1000.0;
+        let saved = (lz4 - smallest.body.len()) as f64;
+        let heavy = Planner::new(Mode::Adaptive, CodecPolicy { decode_weight_bytes_per_us: 2.0 * saved / extra_us, ..CodecPolicy::default() });
+        assert_eq!(heavy.encode_unit(&data).codec, CodecTag::LZ4_V1);
+        let light = Planner::new(Mode::Adaptive, CodecPolicy { decode_weight_bytes_per_us: 0.5 * saved / extra_us, ..CodecPolicy::default() });
+        assert_eq!(light.encode_unit(&data).codec, CodecTag::ZSTD_V1);
+    }
+
+    #[test]
+    fn flat_inputs_skip_zstd_but_skewed_ones_do_not() {
+        // Uniform-looking bytes: LZ4 finds nothing and the entropy floor is
+        // above the input length.
+        let mut s = 0x9E37_79B9_7F4A_7C15u64;
+        let random: Vec<u8> = (0..4096)
+            .map(|_| {
+                s ^= s << 13;
+                s ^= s >> 7;
+                s ^= s << 17;
+                (s >> 24) as u8
+            })
+            .collect();
+        assert!(entropy_floor(&random) >= random.len());
+        for n in [40usize, 64, 512, 4096] {
+            assert!(entropy_floor(&random[..n]) >= n, "{n}");
+        }
+        // Hex digits: no LZ4 matches worth it, but 4 bits per byte.
+        let hex: Vec<u8> = random.iter().map(|b| b"0123456789abcdef"[usize::from(b & 15)]).collect();
+        assert!(entropy_floor(&hex) < hex.len() * 6 / 10);
+        let p = Planner::new(Mode::Adaptive, CodecPolicy::default());
+        assert_eq!(p.encode_unit(&random).codec, CodecTag::RAW_V1);
+        let enc = p.encode_unit(&hex);
+        assert_eq!(enc.codec, CodecTag::ZSTD_V1);
+        assert!(enc.body.len() < hex.len() * 6 / 10);
+        assert!(entropy_floor(&[]) == 0);
+    }
+
+    #[test]
+    fn decisive_dictionary_skips_plain_zstd_and_keeps_exactness() {
+        let samples: Vec<Vec<u8>> = (0..400u64).map(|i| {
+            format!(r#"{{"id":"{}","channel":"general","author":"user{}","content":"{}"}}"#, 1_190_000_000_000u64 + i * 4099, i % 13, String::from_utf8(text(60 + (i as usize % 90), i)).unwrap()).into_bytes()
+        }).collect();
+        let bytes = codec::zstd::train_dictionary(&samples[..300], 8 * 1024).unwrap();
+        let dict = Arc::new(ZstdDict::new(42, bytes, 3).unwrap());
+        let p = Planner::new(Mode::Adaptive, CodecPolicy::default()).with_params(Some(dict.clone()), None);
+        let mut dict_wins = 0;
+        for s in &samples[300..] {
+            let enc = p.encode_unit(s);
+            let mut out = Vec::new();
+            codec::decode(enc.codec, enc.aux_id, &enc.body, s.len() as u32, p.deps(), &mut out).unwrap();
+            assert_eq!(&out, s);
+            if enc.aux_id == 42 {
+                dict_wins += 1;
+                assert_eq!(enc.body[4] & 0b11, 0, "no dictionary id in the frame");
+            }
+        }
+        assert!(dict_wins > 90, "{dict_wins}");
+        assert_eq!(p.snapshot().roundtrip_failures, 0);
+    }
+
+    #[test]
+    fn repeat_search_is_bounded_to_a_quarter_of_the_input() {
+        assert_eq!(repeat_period_limit(40), MAX_REPEAT_PERIOD);
+        assert_eq!(repeat_period_limit(512), 128);
+        assert_eq!(repeat_period_limit(1 << 20), MAX_REPEAT_PERIOD);
+        let p = Planner::new(Mode::Adaptive, CodecPolicy::default());
+        // Four and a half repetitions of a 100-byte motif: still a recipe.
+        let motif: Vec<u8> = (0..100u32).map(|i| (i * 37 % 251) as u8).collect();
+        let data: Vec<u8> = motif.iter().cycle().take(450).copied().collect();
+        let enc = p.encode_unit(&data);
+        assert_eq!((enc.codec, enc.body.len()), (CodecTag::REPEAT_V1, 104));
+        // Short inputs keep the full search: 20 bytes of a 7-byte motif.
+        let short: Vec<u8> = b"abcdefg".iter().cycle().take(20).copied().collect();
+        assert_eq!(p.encode_unit(&short).codec, CodecTag::REPEAT_V1);
+    }
+
+    #[test]
+    fn emit_borrows_the_chosen_body() {
+        let p = Planner::new(Mode::Adaptive, CodecPolicy::default());
+        let data = text(3000, 3);
+        let (codec, len) = p.encode_unit_with(&data, |c, aux, body| {
+            assert_eq!(aux, 0);
+            (c, body.len())
+        });
+        let owned = p.encode_unit(&data);
+        assert_eq!((codec, len), (owned.codec, owned.body.len()));
+        let raw = p.encode_unit_with(b"short", |c, _, body| (c, body.to_vec()));
+        assert_eq!(raw, (CodecTag::RAW_V1, b"short".to_vec()));
     }
 }

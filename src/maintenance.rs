@@ -1214,7 +1214,8 @@ impl<S: Store> Db<S> {
     /// Store a new immutable param, make it the active one of its kind
     /// (durably) and switch the planner to it, keeping the other active
     /// dependency. Earlier params stay as long as objects reference them.
-    fn install_param(&self, kind: u8, bytes: Vec<u8>) -> Result<u64> {
+    /// Also used by the automatic dictionary (`engine::autodict`).
+    pub(crate) fn install_param(&self, kind: u8, bytes: Vec<u8>) -> Result<u64> {
         let _serial = INSTALL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let param = Param {
             kind,
