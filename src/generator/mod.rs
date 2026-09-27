@@ -1,7 +1,42 @@
 //! Registered, versioned, deterministic generators for `put_generated`.
-//! A generator is code shipped in the binary: its size counts in the space
-//! accounting. Output never depends on time, platform or unspecified PRNG state.
-//! SKELETON — the util agent implements the built-in generators.
+//!
+//! A generator expands a small parameter blob into an exact byte stream of
+//! known length. A generated record persists only
+//! `(generator id, version, params, digest)`; its bytes are recomputed on read,
+//! and any byte range can be produced directly.
+//!
+//! # Rules every generator follows
+//!
+//! - **The code is part of the stored representation.** A generator is code
+//!   shipped in this binary. Reading a generated record back needs exactly that
+//!   code, so its size counts in the space accounting (spec §11: binary size
+//!   attributable to generators and codecs).
+//! - **Deterministic and platform independent.** The output depends only on
+//!   `(params, offset, length)`. It never depends on the time, the locale, the
+//!   platform (endianness, word size, SIMD level), thread scheduling or
+//!   unspecified PRNG state. Integers are little-endian and arithmetic is
+//!   checked `u64`.
+//! - **Frozen per version.** Once an `(id, version)` pair ships, its output is
+//!   fixed for every params. Changing any output byte, even to fix a bug,
+//!   requires a new version number. The old version stays registered so
+//!   existing records keep reading back exactly.
+//! - **Random access.** `generate(params, offset, out)` produces bytes
+//!   `[offset, offset + out.len())` without computing the bytes before
+//!   `offset`. The cost is O(out.len()) plus O(1) setup.
+//! - **Untrusted params never panic.** Every entry point validates params and
+//!   the requested range with checked arithmetic and returns
+//!   [`Error::InvalidArgument`]. On error the built-ins leave `out` untouched.
+//!
+//! Built-ins, all version 1: [`ArithU64`] (`ids::ARITH_U64`), [`Blake3Xof`]
+//! (`ids::BLAKE3_XOF`) and [`Repeat`] (`ids::REPEAT`).
+
+mod arith;
+mod repeat;
+mod xof;
+
+pub use arith::{ARITH_U64_PARAMS_LEN, ArithU64};
+pub use repeat::{REPEAT_MAX_MOTIF_LEN, Repeat};
+pub use xof::{BLAKE3_XOF_PARAMS_LEN, Blake3Xof};
 
 use crate::error::{Error, Result};
 
@@ -21,6 +56,8 @@ pub trait Generator: Send + Sync {
     /// Validate params and return the exact output length.
     fn output_len(&self, params: &[u8]) -> Result<u64>;
     /// Write bytes `[offset, offset + out.len())` of the output into `out`.
+    /// Fails with `InvalidArgument` if the params are invalid or the range is
+    /// not inside `[0, output_len]`, checked without overflow.
     fn generate(&self, params: &[u8], offset: u64, out: &mut [u8]) -> Result<()>;
 }
 
@@ -35,11 +72,22 @@ impl Registry {
 
     /// Built-in generators (ARITH_U64, BLAKE3_XOF, REPEAT; version 1).
     pub fn builtin() -> Registry {
-        Registry::empty()
+        let mut r = Registry::empty();
+        r.register(Box::new(ArithU64));
+        r.register(Box::new(Blake3Xof));
+        r.register(Box::new(Repeat));
+        r
     }
 
+    /// Register a generator. The first registration of an `(id, version)` pair
+    /// wins and later duplicates are ignored, so a built-in can never be
+    /// shadowed and existing records keep decoding with the code that wrote
+    /// them.
     pub fn register(&mut self, g: Box<dyn Generator>) {
-        self.gens.push(g);
+        let (id, version) = (g.id(), g.version());
+        if self.get(id, version).is_err() {
+            self.gens.push(g);
+        }
     }
 
     pub fn get(&self, id: u16, version: u16) -> Result<&dyn Generator> {
@@ -51,7 +99,10 @@ impl Registry {
     }
 
     pub fn list(&self) -> Vec<(u16, u16, &'static str)> {
-        self.gens.iter().map(|g| (g.id(), g.version(), g.name())).collect()
+        self.gens
+            .iter()
+            .map(|g| (g.id(), g.version(), g.name()))
+            .collect()
     }
 }
 
@@ -75,4 +126,23 @@ pub fn repeat_params(total_len: u64, motif: &[u8]) -> Vec<u8> {
     p.extend_from_slice(&total_len.to_le_bytes());
     p.extend_from_slice(motif);
     p
+}
+
+/// Check that `[offset, offset + len)` lies inside an output of `output_len`
+/// bytes, without overflow. An empty range at `offset == output_len` is valid.
+pub(crate) fn check_range(name: &str, output_len: u64, offset: u64, len: usize) -> Result<()> {
+    let end = u64::try_from(len).ok().and_then(|l| offset.checked_add(l));
+    match end {
+        Some(end) if end <= output_len => Ok(()),
+        _ => Err(Error::InvalidArgument(format!(
+            "{name}: range of {len} bytes at offset {offset} exceeds output length {output_len}"
+        ))),
+    }
+}
+
+/// Split a little-endian `u64` off the front of `bytes`.
+pub(crate) fn take_u64_le(bytes: &[u8]) -> Option<(u64, &[u8])> {
+    bytes
+        .split_first_chunk::<8>()
+        .map(|(head, rest)| (u64::from_le_bytes(*head), rest))
 }
