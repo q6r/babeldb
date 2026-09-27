@@ -36,7 +36,8 @@ use crate::error::{Error, Result};
 
 type Bytes = &'static [u8];
 type ReadTable = ReadOnlyTable<Bytes, Bytes>;
-type Entry<'a> = std::result::Result<(AccessGuard<'a, Bytes>, AccessGuard<'a, Bytes>), StorageError>;
+type Entry<'a> =
+    std::result::Result<(AccessGuard<'a, Bytes>, AccessGuard<'a, Bytes>), StorageError>;
 
 /// Entries copied per table open by a write-transaction scan: starts small so short or
 /// early-stopped scans stay cheap, then doubles.
@@ -59,7 +60,10 @@ impl RedbStore {
     /// so that read transactions never observe a missing table.
     pub fn open(path: impl AsRef<Path>, cache_bytes: usize) -> Result<RedbStore> {
         let path = path.as_ref().to_path_buf();
-        let db = Builder::new().set_cache_size(cache_bytes).create(&path).map_err(Error::backend)?;
+        let db = Builder::new()
+            .set_cache_size(cache_bytes)
+            .create(&path)
+            .map_err(Error::backend)?;
         create_tables(&db)?;
         Ok(RedbStore { db, path })
     }
@@ -73,8 +77,11 @@ impl RedbStore {
 /// ones) and commits only when some table was missing, so reopening costs no fsync.
 fn create_tables(db: &Database) -> Result<()> {
     let txn = db.begin_write().map_err(Error::backend)?;
-    let existing: Vec<String> =
-        txn.list_tables().map_err(Error::backend)?.map(|h| h.name().to_string()).collect();
+    let existing: Vec<String> = txn
+        .list_tables()
+        .map_err(Error::backend)?
+        .map(|h| h.name().to_string())
+        .collect();
     let mut missing = false;
     for table in Table::ALL {
         missing |= !existing.iter().any(|name| name == table.name());
@@ -165,7 +172,10 @@ impl RedbRead {
         if let Some(t) = slot.get() {
             return Ok(t);
         }
-        let opened = self.txn.open_table(definition(table)).map_err(Error::backend)?;
+        let opened = self
+            .txn
+            .open_table(definition(table))
+            .map_err(Error::backend)?;
         Ok(slot.get_or_init(|| opened))
     }
 }
@@ -184,8 +194,15 @@ impl ReadTxn for RedbRead {
         reverse: bool,
         f: &mut ScanFn<'_>,
     ) -> Result<()> {
-        let range = self.table(table)?.range::<&[u8]>((start, end)).map_err(Error::backend)?;
-        if reverse { visit(range.rev(), f) } else { visit(range, f) }
+        let range = self
+            .table(table)?
+            .range::<&[u8]>((start, end))
+            .map_err(Error::backend)?;
+        if reverse {
+            visit(range.rev(), f)
+        } else {
+            visit(range, f)
+        }
     }
 
     fn len(&self, table: Table) -> Result<u64> {
@@ -202,14 +219,19 @@ pub struct RedbWrite<'a> {
 
 impl RedbWrite<'_> {
     fn open(&self, table: Table) -> Result<::redb::Table<'_, Bytes, Bytes>> {
-        self.txn.open_table(definition(table)).map_err(Error::backend)
+        self.txn
+            .open_table(definition(table))
+            .map_err(Error::backend)
     }
 }
 
 impl ReadTxn for RedbWrite<'_> {
     fn get(&self, table: Table, key: &[u8]) -> Result<Option<Vec<u8>>> {
         let t = self.open(table)?;
-        let value = t.get(key).map_err(Error::backend)?.map(|v| v.value().to_vec());
+        let value = t
+            .get(key)
+            .map_err(Error::backend)?
+            .map(|v| v.value().to_vec());
         Ok(value)
     }
 
@@ -232,7 +254,11 @@ impl ReadTxn for RedbWrite<'_> {
                 let range = t
                     .range::<&[u8]>((bound_slice(&lower), bound_slice(&upper)))
                     .map_err(Error::backend)?;
-                if reverse { batch.fill(range.rev(), limit)? } else { batch.fill(range, limit)? }
+                if reverse {
+                    batch.fill(range.rev(), limit)?
+                } else {
+                    batch.fill(range, limit)?
+                }
             };
             for (k, v) in batch.iter() {
                 if !f(k, v)? {
@@ -287,12 +313,18 @@ impl Store for RedbStore {
 
     fn begin_read(&self) -> Result<RedbRead> {
         let txn = self.db.begin_read().map_err(Error::backend)?;
-        Ok(RedbRead { txn, tables: Default::default() })
+        Ok(RedbRead {
+            txn,
+            tables: Default::default(),
+        })
     }
 
     fn begin_write(&self) -> Result<RedbWrite<'_>> {
         let txn = self.db.begin_write().map_err(Error::backend)?;
-        Ok(RedbWrite { txn, _store: PhantomData })
+        Ok(RedbWrite {
+            txn,
+            _store: PhantomData,
+        })
     }
 
     /// Runs redb compaction; `Ok(true)` means it ran (whether redb moved any page is not
