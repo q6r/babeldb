@@ -3,21 +3,40 @@
 //! envelopes of the others are copied out and the snapshot is released before
 //! they are decoded (up to `DETACHED_ENVELOPE_BYTES`; beyond that, blocks are
 //! decoded while the snapshot is still held so memory stays bounded).
+//!
+//! Inline records (the common case for small values) are parsed once, in
+//! place (`inline_view`): no copy of the envelope, one header parse, one
+//! dependency lookup. A `RawV1` value is verified in the record buffer and
+//! returned in it (the only copy is the backend's); other codecs decode into
+//! one exactly sized buffer. Verified inline values of the other codecs are
+//! offered to the value namespace of the block cache, keyed by the revision
+//! of their manifest (unique and immutable); from their second recent read on
+//! they are kept, so
+//! repeated reads skip decoding and hashing while one-off reads (uniform
+//! access over a large dataset) cost no copy and evict nothing. Scans with
+//! values resolve inline records inside the backend scan, from the borrowed
+//! record bytes.
 
 use std::ops::{Bound, Range};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use super::{Db, HistoryEntry, Revision, ScanItem, ScanOptions, ops, prefix_successor};
+use super::ops::{self, ParamEntry};
+use super::{Db, HistoryEntry, Revision, ScanItem, ScanOptions, prefix_successor};
 use crate::chunk;
 use crate::codec;
 use crate::error::{Error, Result};
-use crate::format::{self, ChunkRef, MAX_UNIT_LEN, Manifest, ManifestBody, SourceDescriptor};
+use crate::format::{self, ChunkRef, CodecTag, EnvelopeHeader, MAX_UNIT_LEN, Manifest, ManifestBody, SourceDescriptor};
 use crate::hash::{self, Digest};
 use crate::store::{ReadTxn, Store, Table};
 
 /// Envelope bytes held outside the snapshot before decoding starts in place.
 const DETACHED_ENVELOPE_BYTES: usize = 8 << 20;
+
+/// Scans with values and a `limit` of at most this many items keep the inline
+/// values they decode in the value cache (larger or unlimited scans only read
+/// it, so a bulk export does not flush the hot set).
+pub const VALUE_CACHE_SCAN_LIMIT: usize = 1024;
 
 /// Requested bytes of a value, clamped to its length.
 #[derive(Clone, Copy, Debug)]
@@ -56,6 +75,11 @@ impl Span {
     fn is_empty_part(&self) -> bool {
         self.len == 0 && !self.whole
     }
+
+    /// The span as a range of an inline value (at most `u32::MAX` bytes).
+    fn bytes(&self) -> Range<usize> {
+        self.offset as usize..(self.offset + self.len) as usize
+    }
 }
 
 /// An Inline manifest located inside the record bytes, without copying its
@@ -63,7 +87,10 @@ impl Span {
 struct InlineView {
     revision: u64,
     logical_len: u64,
-    envelope: Range<usize>,
+    /// Parsed and validated envelope header.
+    header: EnvelopeHeader,
+    /// The envelope body inside the record bytes.
+    body: Range<usize>,
 }
 
 /// The checks of `Manifest::decode` for the Inline kind (format v1: version,
@@ -90,15 +117,54 @@ fn inline_view(raw: &[u8]) -> Option<InlineView> {
         _ => return None,
     }
     let len = usize::try_from(format::get_varint(raw, &mut pos).ok()?).ok()?;
-    let envelope = pos..pos.checked_add(len)?;
-    if envelope.end != raw.len() {
+    let end = pos.checked_add(len)?;
+    if end != raw.len() {
         return None;
     }
-    let (header, _) = format::read_envelope(&raw[envelope.clone()]).ok()?;
+    let (header, _) = format::read_envelope(&raw[pos..end]).ok()?;
     if u64::from(header.raw_len) != logical_len {
         return None;
     }
-    Some(InlineView { revision, logical_len, envelope })
+    Some(InlineView { revision, logical_len, header, body: pos + format::ENVELOPE_HEADER_LEN..end })
+}
+
+/// Revision of a valid Inline manifest; None for other kinds and any deviation.
+pub(super) fn inline_revision(raw: &[u8]) -> Option<u64> {
+    inline_view(raw).map(|view| view.revision)
+}
+
+/// (revision, logical_len, tombstone) of a manifest, fully validated, without
+/// copying an inline envelope.
+fn manifest_head(raw: &[u8]) -> Result<(u64, u64, bool)> {
+    match inline_view(raw) {
+        Some(view) => Ok((view.revision, view.logical_len, false)),
+        None => {
+            let m = Manifest::decode(raw)?;
+            Ok((m.revision, m.logical_len, m.is_tombstone()))
+        }
+    }
+}
+
+/// A record read from `records` or `history`.
+enum Record {
+    Inline { raw: Vec<u8>, view: InlineView },
+    Other(Manifest),
+}
+
+impl Record {
+    fn parse(raw: Vec<u8>) -> Result<Record> {
+        match inline_view(&raw) {
+            Some(view) => Ok(Record::Inline { raw, view }),
+            None => Ok(Record::Other(Manifest::decode(&raw)?)),
+        }
+    }
+
+    fn revision(&self) -> u64 {
+        match self {
+            Record::Inline { view, .. } => view.revision,
+            Record::Other(m) => m.revision,
+        }
+    }
 }
 
 /// Decode work of one read, added to the counters once.
@@ -111,7 +177,7 @@ struct Work {
 /// What a read took from the snapshot; decoded by `Db::finish`.
 enum Pending {
     /// Inline envelope (its dependency is loaded).
-    Inline(Vec<u8>),
+    Inline { revision: u64, envelope: Vec<u8> },
     Chunks(ChunkRead),
     Generated { generator_id: u16, generator_version: u16, params: Vec<u8>, digest: Digest, logical_len: u64 },
     Empty,
@@ -151,7 +217,116 @@ fn slice_owned(unit: Vec<u8>, range: Range<usize>, object_id: Option<u64>) -> Re
         .ok_or_else(|| Error::integrity(object_id, "decoded unit is shorter than its manifest entry"))
 }
 
+/// A deferred item of a scan with values, resolved after the backend scan.
+enum Deferred {
+    /// Inline record whose dependency is not prepared yet.
+    Inline { revision: u64, header: EnvelopeHeader, body: Vec<u8> },
+    Manifest(Manifest),
+}
+
 impl<S: Store> Db<S> {
+    /// Whether verified inline values go through the value cache.
+    fn value_cache_on(&self) -> bool {
+        self.cfg.cache_values && self.cfg.verify_on_read && self.cfg.cache_bytes > 0
+    }
+
+    /// Whether the value of an inline record with header `h` may be cached:
+    /// `RawV1` values are not (a hit would only save the digest check, and
+    /// the bytes would be held twice, next to the backend's page cache).
+    fn caches(h: &EnvelopeHeader) -> bool {
+        h.codec != CodecTag::RAW_V1
+    }
+
+    /// The whole cached value of an inline record, if the value cache has it.
+    fn cached_inline(&self, view: &InlineView) -> Option<Arc<[u8]>> {
+        if !self.value_cache_on() || !Self::caches(&view.header) {
+            return None;
+        }
+        // A cached value always has the manifest's length; anything else is
+        // never served (the record is decoded instead).
+        self.cache.get_value(view.revision).filter(|v| v.len() as u64 == view.logical_len)
+    }
+
+    /// Offer a verified value to the cache (stored on its second recent offer).
+    fn remember_inline(&self, revision: u64, header: &EnvelopeHeader, value: &[u8], cache: bool) {
+        if cache && Self::caches(header) {
+            self.cache.offer_value(revision, value);
+        }
+    }
+
+    /// Decode (and verify, per `verify_on_read`) the whole value of an inline
+    /// record from its envelope body, borrowed from the record bytes.
+    fn decode_inline_body(
+        &self,
+        revision: u64,
+        header: &EnvelopeHeader,
+        body: &[u8],
+        entry: Option<&ParamEntry>,
+        cache: bool,
+        work: &mut Work,
+    ) -> Result<Vec<u8>> {
+        let mut out = Vec::new();
+        ops::decode_body_into(header, body, entry, self.cfg.verify_on_read, None, &mut out)?;
+        work.units += 1;
+        work.bytes += out.len() as u64;
+        self.remember_inline(revision, header, &out, cache);
+        Ok(out)
+    }
+
+    /// The requested span of an inline record whose bytes (`raw`) the caller
+    /// owns. A `RawV1` value is verified where it lies and moved to the front
+    /// of `raw`, which becomes the result: no second buffer.
+    fn finish_inline_record(
+        &self,
+        mut raw: Vec<u8>,
+        view: &InlineView,
+        entry: Option<ParamEntry>,
+        span: Span,
+        work: &mut Work,
+    ) -> Result<Vec<u8>> {
+        let h = &view.header;
+        if h.codec != CodecTag::RAW_V1 {
+            let cache = self.value_cache_on();
+            let value = self.decode_inline_body(view.revision, h, &raw[view.body.clone()], entry.as_ref(), cache, work)?;
+            return slice_owned(value, span.bytes(), None);
+        }
+        // `codec::decode` of RawV1 followed by the digest check, in place.
+        let body = &raw[view.body.clone()];
+        if body.len() != h.raw_len as usize {
+            return Err(Error::format("RawV1 body length != raw_len"));
+        }
+        if self.cfg.verify_on_read && hash::digest(body) != h.digest {
+            return Err(Error::integrity(None, "BLAKE3 digest mismatch"));
+        }
+        work.units += 1;
+        work.bytes += body.len() as u64;
+        let part = span.bytes();
+        let start = view.body.start + part.start;
+        let len = part.len();
+        raw.copy_within(start..start + len, 0);
+        raw.truncate(len);
+        Ok(raw)
+    }
+
+    /// The requested span of an inline record, from the value cache or decoded.
+    /// The snapshot `t` is only used to load a dependency that is not prepared.
+    fn read_inline<T: ReadTxn>(&self, t: T, raw: Vec<u8>, view: &InlineView, span: Span) -> Result<Vec<u8>> {
+        let mut work = Work::default();
+        let value = match self.cached_inline(view) {
+            Some(v) => {
+                drop(t);
+                v[span.bytes()].to_vec()
+            }
+            None => {
+                let entry = self.params.dependency(&t, &view.header)?;
+                drop(t);
+                self.finish_inline_record(raw, view, entry, span, &mut work)?
+            }
+        };
+        self.note_read(&work, value.len());
+        Ok(value)
+    }
+
     /// Read (part of) the value of `m`, releasing the snapshot before decoding.
     fn read_detached<T: ReadTxn>(&self, t: T, m: Manifest, range: Option<(u64, u64)>) -> Result<Vec<u8>> {
         let span = Span::of(m.logical_len, range)?;
@@ -163,22 +338,13 @@ impl<S: Store> Db<S> {
         self.finish(pending, span)
     }
 
-    /// Decode an inline envelope (dependencies loaded) and keep the span.
-    fn decode_inline(&self, envelope: &[u8], span: Span, work: &mut Work) -> Result<Vec<u8>> {
-        let unit = ops::decode_envelope(envelope, &self.params, self.cfg.verify_on_read, None)?;
-        work.units += 1;
-        work.bytes += unit.len() as u64;
-        // Inline values are at most `u32::MAX` bytes (`raw_len`), so the span fits.
-        slice_owned(unit, span.offset as usize..(span.offset + span.len) as usize, None)
-    }
-
     /// Phase 1 (snapshot held): load decoding dependencies and copy the
     /// envelopes of blocks that are not cached.
     fn fetch<T: ReadTxn + ?Sized>(&self, t: &T, m: Manifest, span: Span) -> Result<Pending> {
         Ok(match m.body {
             ManifestBody::Inline(envelope) => {
                 self.params.ensure_for_envelope(t, &envelope)?;
-                Pending::Inline(envelope)
+                Pending::Inline { revision: m.revision, envelope }
             }
             ManifestBody::Chunks(refs) => Pending::Chunks(self.fetch_chunks(t, &refs, span)?),
             ManifestBody::Generated { generator_id, generator_version, params, digest } => {
@@ -192,7 +358,15 @@ impl<S: Store> Db<S> {
     fn finish(&self, pending: Pending, span: Span) -> Result<Vec<u8>> {
         let mut work = Work::default();
         let value = match pending {
-            Pending::Inline(envelope) => self.decode_inline(&envelope, span, &mut work)?,
+            Pending::Inline { revision, envelope } => {
+                let (h, body) = format::read_envelope(&envelope)?;
+                let entry = match codec::required_param(h.codec, h.aux_id) {
+                    Some(_) => Some(self.params.get(h.aux_id).ok_or(Error::MissingDependency { param_id: h.aux_id })?),
+                    None => None,
+                };
+                let value = self.decode_inline_body(revision, &h, body, entry.as_ref(), self.value_cache_on(), &mut work)?;
+                slice_owned(value, span.bytes(), None)?
+            }
             Pending::Chunks(read) => {
                 let (value, chunk_work) = self.finish_chunks(read, span.len)?;
                 work = chunk_work;
@@ -352,13 +526,8 @@ pub(super) fn get_value<S: Store>(
         if span.is_empty_part() {
             return Ok(Some((view.revision, Vec::new())));
         }
-        let envelope = &raw[view.envelope];
-        db.params.ensure_for_envelope(&r, envelope)?;
-        drop(r);
-        let mut work = Work::default();
-        let value = db.decode_inline(envelope, span, &mut work)?;
-        db.note_read(&work, value.len());
-        return Ok(Some((view.revision, value)));
+        let revision = view.revision;
+        return Ok(Some((revision, db.read_inline(r, raw, &view, span)?)));
     }
     let m = Manifest::decode(&raw)?;
     drop(raw);
@@ -375,33 +544,35 @@ pub(super) fn head<S: Store>(db: &Db<S>, key: &[u8]) -> Result<Option<(Revision,
         return Ok(None);
     };
     drop(r);
-    if let Some(view) = inline_view(&raw) {
-        return Ok(Some((view.revision, view.logical_len)));
-    }
-    let m = Manifest::decode(&raw)?;
-    Ok((!m.is_tombstone()).then_some((m.revision, m.logical_len)))
+    let (revision, logical_len, tombstone) = manifest_head(&raw)?;
+    Ok((!tombstone).then_some((revision, logical_len)))
 }
 
 pub(super) fn get_at<S: Store>(db: &Db<S>, key: &[u8], revision: Revision) -> Result<Option<Vec<u8>>> {
     db.counters.gets.fetch_add(1, Ordering::Relaxed);
     let r = db.store.begin_read()?;
-    let m = match ops::load_manifest(&r, key)? {
-        Some(m) if m.revision == revision => m,
+    let current = r.get(Table::Records, key)?.map(Record::parse).transpose()?;
+    let record = match current {
+        Some(rec) if rec.revision() == revision => rec,
         _ => match r.get(Table::History, &format::history_key(key, revision))? {
             Some(raw) => {
-                let m = Manifest::decode(&raw)?;
-                if m.revision != revision {
+                let rec = Record::parse(raw)?;
+                if rec.revision() != revision {
                     return Err(Error::format("history entry revision differs from its key"));
                 }
-                m
+                rec
             }
             None => return Ok(None),
         },
     };
-    if m.is_tombstone() {
-        return Ok(None);
+    match record {
+        Record::Inline { raw, view } => {
+            let span = Span::whole(view.logical_len);
+            db.read_inline(r, raw, &view, span).map(Some)
+        }
+        Record::Other(m) if m.is_tombstone() => Ok(None),
+        Record::Other(m) => db.read_detached(r, m, None).map(Some),
     }
-    db.read_detached(r, m, None).map(Some)
 }
 
 /// Bounds that cannot select anything (start after end, or equal with one side
@@ -425,40 +596,81 @@ pub(super) fn scan<S: Store>(db: &Db<S>, opts: &ScanOptions) -> Result<Vec<ScanI
     }
     let r = db.store.begin_read()?;
     let full = |n: usize| opts.limit != 0 && n >= opts.limit;
+    let (start, end) = (slice_bound(&opts.start), slice_bound(&opts.end));
+    let mut items: Vec<ScanItem> = Vec::new();
     if !opts.with_values {
-        let mut items = Vec::new();
-        r.scan(Table::Records, slice_bound(&opts.start), slice_bound(&opts.end), opts.reverse, &mut |k: &[u8], v: &[u8]| {
-            let m = Manifest::decode(v)?;
-            if !m.is_tombstone() {
-                items.push(ScanItem { key: k.to_vec(), revision: m.revision, logical_len: m.logical_len, value: None });
+        r.scan(Table::Records, start, end, opts.reverse, &mut |k: &[u8], v: &[u8]| {
+            let (revision, logical_len, tombstone) = manifest_head(v)?;
+            if !tombstone {
+                items.push(ScanItem { key: k.to_vec(), revision, logical_len, value: None });
             }
             Ok(!full(items.len()))
         })?;
         return Ok(items);
     }
-    // The backend scan stops at the limit; values are then reconstructed
-    // with the same snapshot.
-    let mut found: Vec<(Vec<u8>, Manifest)> = Vec::new();
-    r.scan(Table::Records, slice_bound(&opts.start), slice_bound(&opts.end), opts.reverse, &mut |k: &[u8], v: &[u8]| {
-        let m = Manifest::decode(v)?;
-        if !m.is_tombstone() {
-            found.push((k.to_vec(), m));
-        }
-        Ok(!full(found.len()))
+    // The backend scan stops at the limit. Inline values are resolved inside
+    // it, from the borrowed record bytes, when their dependency is prepared;
+    // the other records are resolved afterwards with the same snapshot.
+    let cache = db.value_cache_on() && opts.limit != 0 && opts.limit <= VALUE_CACHE_SCAN_LIMIT;
+    let mut deferred: Vec<(usize, Deferred)> = Vec::new();
+    let mut work = Work::default();
+    let mut inline_bytes = 0usize;
+    r.scan(Table::Records, start, end, opts.reverse, &mut |k: &[u8], v: &[u8]| {
+        let Some(view) = inline_view(v) else {
+            let m = Manifest::decode(v)?;
+            if !m.is_tombstone() {
+                let (revision, logical_len) = (m.revision, m.logical_len);
+                deferred.push((items.len(), Deferred::Manifest(m)));
+                items.push(ScanItem { key: k.to_vec(), revision, logical_len, value: None });
+            }
+            return Ok(!full(items.len()));
+        };
+        let value = match db.cached_inline(&view) {
+            Some(value) => Some(value.to_vec()),
+            None => match db.params.cached_dependency(&view.header) {
+                Ok(entry) => Some(db.decode_inline_body(
+                    view.revision,
+                    &view.header,
+                    &v[view.body.clone()],
+                    entry.as_ref(),
+                    cache,
+                    &mut work,
+                )?),
+                Err(()) => {
+                    let body = v[view.body.clone()].to_vec();
+                    deferred.push((items.len(), Deferred::Inline { revision: view.revision, header: view.header.clone(), body }));
+                    None
+                }
+            },
+        };
+        inline_bytes += value.as_ref().map_or(0, Vec::len);
+        items.push(ScanItem { key: k.to_vec(), revision: view.revision, logical_len: view.logical_len, value });
+        Ok(!full(items.len()))
     })?;
-    let mut items = Vec::with_capacity(found.len());
-    for (key, m) in found {
-        let (revision, logical_len) = (m.revision, m.logical_len);
-        let span = Span::whole(logical_len);
-        let pending = db.fetch(&r, m, span)?;
-        let value = db.finish(pending, span)?;
-        items.push(ScanItem { key, revision, logical_len, value: Some(value) });
+    for (idx, item) in deferred {
+        let value = match item {
+            Deferred::Inline { revision, header, body } => {
+                let entry = db.params.dependency(&r, &header)?;
+                let value = db.decode_inline_body(revision, &header, &body, entry.as_ref(), cache, &mut work)?;
+                inline_bytes += value.len();
+                value
+            }
+            Deferred::Manifest(m) => {
+                let span = Span::whole(m.logical_len);
+                let pending = db.fetch(&r, m, span)?;
+                db.finish(pending, span)?
+            }
+        };
+        items[idx].value = Some(value);
+    }
+    if inline_bytes > 0 || work.units > 0 {
+        db.note_read(&work, inline_bytes);
     }
     Ok(items)
 }
 
-fn history_entry(m: &Manifest, current: bool) -> HistoryEntry {
-    HistoryEntry { revision: m.revision, logical_len: m.logical_len, tombstone: m.is_tombstone(), current }
+fn history_entry(revision: u64, logical_len: u64, tombstone: bool, current: bool) -> HistoryEntry {
+    HistoryEntry { revision, logical_len, tombstone, current }
 }
 
 pub(super) fn history<S: Store>(db: &Db<S>, key: &[u8]) -> Result<Vec<HistoryEntry>> {
@@ -469,15 +681,16 @@ pub(super) fn history<S: Store>(db: &Db<S>, key: &[u8]) -> Result<Vec<HistoryEnt
     let mut entries = Vec::new();
     r.scan(Table::History, Bound::Included(&prefix), end, false, &mut |k: &[u8], v: &[u8]| {
         let (_, revision) = format::parse_history_key(k)?;
-        let m = Manifest::decode(v)?;
-        if m.revision != revision {
+        let (rev, logical_len, tombstone) = manifest_head(v)?;
+        if rev != revision {
             return Err(Error::format("history entry revision differs from its key"));
         }
-        entries.push(history_entry(&m, false));
+        entries.push(history_entry(rev, logical_len, tombstone, false));
         Ok(true)
     })?;
-    if let Some(m) = ops::load_manifest(&r, key)? {
-        entries.push(history_entry(&m, true));
+    if let Some(raw) = r.get(Table::Records, key)? {
+        let (rev, logical_len, tombstone) = manifest_head(&raw)?;
+        entries.push(history_entry(rev, logical_len, tombstone, true));
     }
     Ok(entries)
 }
@@ -495,7 +708,161 @@ pub(super) fn sources<S: Store>(db: &Db<S>) -> Result<Vec<(u64, SourceDescriptor
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
+    use crate::engine::Expect;
     use crate::format::CodecTag;
+    use crate::store::mem::MemStore;
+    use crate::store::{Durability, WriteTxn};
+
+    fn mem_db(cfg: Config) -> Db<MemStore> {
+        Db::with_store(MemStore::new(), cfg).unwrap()
+    }
+
+    /// Compressible text of `n` bytes.
+    fn text(n: usize, seed: u64) -> Vec<u8> {
+        let words = ["the", "deploy", "worked", "thanks", "prod", "is", "slow", "see", "you", "lol"];
+        let mut s = seed | 1;
+        let mut out = Vec::with_capacity(n + 8);
+        while out.len() < n {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            out.extend_from_slice(words[(s % 10) as usize].as_bytes());
+            out.push(b' ');
+        }
+        out.truncate(n);
+        out
+    }
+
+    fn tamper_last_byte(db: &Db<MemStore>, key: &[u8]) {
+        let mut w = db.store.begin_write().unwrap();
+        let mut raw = w.get(Table::Records, key).unwrap().unwrap();
+        *raw.last_mut().unwrap() ^= 0x40;
+        w.put(Table::Records, key, &raw).unwrap();
+        w.commit(Durability::Immediate).unwrap();
+    }
+
+    #[test]
+    fn raw_values_skip_the_value_cache() {
+        let db = mem_db(Config::raw_only());
+        let v = text(700, 1);
+        db.put(b"k", &v, Expect::Any).unwrap();
+        let before = db.counters.snapshot().units_decoded;
+        for _ in 0..3 {
+            assert_eq!(db.get(b"k").unwrap().unwrap(), v);
+        }
+        assert_eq!(db.get_range(b"k", 5, 10).unwrap().unwrap(), v[5..15]);
+        let items = db.scan(&ScanOptions::all().limit(5).with_values(true)).unwrap();
+        assert_eq!(items[0].value.as_deref(), Some(&v[..]));
+        assert_eq!(db.counters.snapshot().units_decoded - before, 5, "verified on every read");
+        let s = db.cache.stats();
+        assert_eq!((s.entries, s.hits, s.misses), (0, 0, 0), "{s:?}");
+    }
+
+    #[test]
+    fn inline_values_are_served_from_the_value_cache() {
+        {
+            let db = mem_db(Config::adaptive());
+            let v1 = text(700, 1);
+            let rev1 = db.put(b"k", &v1, Expect::Any).unwrap();
+            let c0 = db.counters.snapshot();
+            // Read once: decoded, offered, not kept yet. Read again: kept.
+            for n in 1..=2 {
+                assert_eq!(db.get(b"k").unwrap().unwrap(), v1);
+                assert_eq!(db.cache.stats().entries, n - 1);
+            }
+            let c1 = db.counters.snapshot();
+            assert_eq!((c1.units_decoded - c0.units_decoded, c1.bytes_reconstructed - c0.bytes_reconstructed), (2, 1400));
+            // Hits: nothing decoded, the requested bytes are counted.
+            assert_eq!(db.get(b"k").unwrap().unwrap(), v1);
+            assert_eq!(db.get_range(b"k", 10, 20).unwrap().unwrap(), v1[10..30]);
+            assert_eq!(db.get_at(b"k", rev1).unwrap().unwrap(), v1);
+            let c2 = db.counters.snapshot();
+            assert_eq!(c2.units_decoded, c1.units_decoded);
+            assert_eq!(c2.bytes_requested - c1.bytes_requested, 700 + 20 + 700);
+            // A new revision is a new entry; the old one is never served for it.
+            let v2 = text(650, 2);
+            let rev2 = db.put(b"k", &v2, Expect::Any).unwrap();
+            assert_eq!(db.get_with_revision(b"k").unwrap().unwrap(), (rev2, v2.clone()));
+            assert_eq!(db.get_range(b"k", 600, 100).unwrap().unwrap(), v2[600..]);
+            assert_eq!(db.get_range(b"k", 0, 5).unwrap().unwrap(), v2[..5]);
+            let s = db.cache.stats();
+            assert_eq!(s.entries, 2, "{s:?}");
+            assert!(s.hits >= 4, "{s:?}");
+        }
+    }
+
+    #[test]
+    fn only_verified_values_are_cached_and_damage_is_never_returned() {
+        let db = mem_db(Config::adaptive());
+        let v = text(500, 3);
+        db.put(b"k", &v, Expect::Any).unwrap();
+        tamper_last_byte(&db, b"k");
+        // Never read before the damage: decoding reports it.
+        assert!(db.get(b"k").is_err());
+        assert_eq!(db.cache.stats().entries, 0, "a failed verification caches nothing");
+        db.put(b"k", &v, Expect::Any).unwrap();
+        for _ in 0..2 {
+            assert_eq!(db.get(b"k").unwrap().unwrap(), v);
+        }
+        assert_eq!(db.cache.stats().entries, 1);
+        tamper_last_byte(&db, b"k");
+        // The verified value of that revision is served; once the cache is
+        // dropped the damage is reported again, never returned.
+        assert_eq!(db.get(b"k").unwrap().unwrap(), v);
+        db.clear_cache();
+        assert!(db.get(b"k").is_err());
+        assert!(db.get(b"k").is_err());
+
+        // Without verification nothing goes through the value cache.
+        let db = mem_db(Config { verify_on_read: false, ..Config::adaptive() });
+        db.put(b"k", &v, Expect::Any).unwrap();
+        let before = db.counters.snapshot().units_decoded;
+        for _ in 0..3 {
+            assert_eq!(db.get(b"k").unwrap().unwrap(), v);
+        }
+        assert_eq!(db.counters.snapshot().units_decoded - before, 3);
+        assert_eq!(db.cache.stats().entries, 0);
+        // Nor when it is switched off.
+        let db = mem_db(Config { cache_values: false, ..Config::adaptive() });
+        db.put(b"k", &v, Expect::Any).unwrap();
+        for _ in 0..3 {
+            db.get(b"k").unwrap();
+        }
+        assert_eq!(db.cache.stats().entries, 0);
+    }
+
+    #[test]
+    fn bounded_scans_fill_the_value_cache_and_unbounded_ones_only_read_it() {
+        let db = mem_db(Config::adaptive());
+        let values: Vec<Vec<u8>> = (0..30).map(|i| text(200 + i * 7, i as u64 + 10)).collect();
+        for (i, v) in values.iter().enumerate() {
+            db.put(format!("s/{i:02}").as_bytes(), v, Expect::Any).unwrap();
+        }
+        for _ in 0..3 {
+            let all = db.scan(&ScanOptions::prefix(b"s/").with_values(true)).unwrap();
+            assert_eq!(all.len(), 30);
+        }
+        assert_eq!(db.cache.stats().entries, 0, "unlimited scans do not fill the cache");
+        let all = db.scan(&ScanOptions::prefix(b"s/").with_values(true)).unwrap();
+        let opts = ScanOptions::prefix(b"s/").reverse(true).limit(10).with_values(true);
+        let latest = db.scan(&opts).unwrap();
+        assert_eq!(db.cache.stats().entries, 0, "first offer");
+        assert_eq!(db.scan(&opts).unwrap(), latest);
+        assert_eq!(db.cache.stats().entries, 10);
+        let before = db.counters.snapshot();
+        assert_eq!(db.scan(&opts).unwrap(), latest);
+        let after = db.counters.snapshot();
+        assert_eq!(after.units_decoded, before.units_decoded, "served from the cache");
+        assert_eq!(after.bytes_requested - before.bytes_requested, latest.iter().map(|i| i.logical_len).sum::<u64>());
+        for (i, item) in all.iter().enumerate() {
+            assert_eq!(item.value.as_deref(), Some(&values[i][..]));
+            assert_eq!(item.value, db.get(&item.key).unwrap());
+        }
+        for (j, item) in latest.iter().enumerate() {
+            assert_eq!(item.value.as_deref(), Some(&values[29 - j][..]));
+        }
+    }
 
     fn inline_manifest(len: usize, source_id: Option<u64>) -> Vec<u8> {
         let data: Vec<u8> = (0..len).map(|i| i as u8).collect();
@@ -523,14 +890,23 @@ mod tests {
         let decoded = Manifest::decode(bytes);
         match inline_view(bytes) {
             Some(view) => {
-                let m = decoded.expect("the view accepted bytes that Manifest::decode rejects");
+                let m = decoded.as_ref().expect("the view accepted bytes that Manifest::decode rejects");
                 assert_eq!((m.revision, m.logical_len), (view.revision, view.logical_len));
-                assert_eq!(m.body, ManifestBody::Inline(bytes[view.envelope].to_vec()));
+                let envelope = &bytes[view.body.start - format::ENVELOPE_HEADER_LEN..view.body.end];
+                assert_eq!(m.body, ManifestBody::Inline(envelope.to_vec()));
+                let (h, body) = format::read_envelope(envelope).unwrap();
+                assert_eq!((h, body), (view.header.clone(), &bytes[view.body.clone()]));
             }
             None => assert!(
                 !matches!(decoded, Ok(Manifest { body: ManifestBody::Inline(_), .. })),
                 "the view missed a valid inline manifest"
             ),
+        }
+        // `manifest_head` agrees with `Manifest::decode` on every input.
+        match (manifest_head(bytes), decoded) {
+            (Ok(head), Ok(m)) => assert_eq!(head, (m.revision, m.logical_len, m.is_tombstone())),
+            (Err(_), Err(_)) => {}
+            (a, b) => panic!("manifest_head {a:?} vs decode {b:?}"),
         }
     }
 
@@ -563,6 +939,7 @@ mod tests {
         assert!(s.whole && s.len == 10);
         let s = Span::range(10, 3, u64::MAX).unwrap();
         assert!(!s.whole && s.len == 7);
+        assert_eq!(s.bytes(), 3..10);
         let s = Span::whole(0);
         assert!(s.whole && !s.is_empty_part());
         assert!(Span::of(0, Some((0, 0))).unwrap().whole);

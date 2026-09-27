@@ -3,6 +3,11 @@
 //! header must declare the content size, equal to raw_len (every frame this
 //! module writes does).
 //!
+//! Frames compressed with a dictionary are written without the optional
+//! `Dictionary_ID` field (4 bytes for trained dictionaries): the format
+//! identifies the dictionary by `aux_id` only (docs/format.md §8), and
+//! decoders accept frames with or without the field.
+//!
 //! Compression and decompression contexts are reused per thread (one-shot
 //! calls fully reset them); a context that reported an error is dropped.
 
@@ -125,20 +130,60 @@ fn with_ctx<C>(
 
 /// One frame holding `data`. With a dictionary prepared for `level` the
 /// digested dictionary is reused; another level re-digests it for this call.
+/// Frames with a dictionary carry no `Dictionary_ID` (see the module docs).
 pub fn encode(data: &[u8], level: i32, dict: Option<&ZstdDict>) -> Result<Vec<u8>> {
-    let mut body = Vec::with_capacity(zstd_safe::compress_bound(data.len()));
+    let mut body = Vec::new();
+    encode_into(data, level, dict, &mut body)?;
+    Ok(body)
+}
+
+/// `encode` into a reusable buffer: on success `out` holds exactly the frame.
+pub fn encode_into(data: &[u8], level: i32, dict: Option<&ZstdDict>, out: &mut Vec<u8>) -> Result<()> {
+    out.clear();
+    out.reserve(zstd_safe::compress_bound(data.len()));
     match dict {
-        None => with_ctx(&CCTX, CCtx::try_create, |c| {
-            c.compress(&mut body, data, level)
-        })?,
-        Some(d) if d.level == level => with_ctx(&CCTX, CCtx::try_create, |c| {
-            c.compress_using_cdict(&mut body, data, &d.cdict)
-        })?,
+        None => with_ctx(&CCTX, CCtx::try_create, |c| c.compress(out, data, level))?,
+        Some(d) if d.level == level => {
+            with_ctx(&CCTX, CCtx::try_create, |c| c.compress_using_cdict(out, data, &d.cdict))?
+        }
         Some(d) => with_ctx(&CCTX, CCtx::try_create, |c| {
-            c.compress_using_dict(&mut body, data, &d.bytes, level)
+            c.compress_using_dict(out, data, &d.bytes, level)
         })?,
     };
-    Ok(body)
+    if dict.is_some() {
+        strip_dict_id(out);
+    }
+    Ok(())
+}
+
+const FRAME_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
+
+/// Remove the optional `Dictionary_ID` field from the header of the frame at
+/// the start of `frame` (RFC 8878 §3.1.1.1): clear the two
+/// `Dictionary_ID_flag` bits of the Frame_Header_Descriptor and delete the
+/// 1, 2 or 4 bytes of the field, which follow the descriptor and the
+/// optional Window_Descriptor (present when `Single_Segment_flag` is 0). No
+/// checksum covers the header, so the frame stays valid and decodes to the
+/// same bytes. Returns false (and leaves `frame` unchanged) for anything that
+/// is not a frame header.
+fn strip_dict_id(frame: &mut Vec<u8>) -> bool {
+    const DID_FIELD_LEN: [usize; 4] = [0, 1, 2, 4];
+    if frame.len() < 5 || frame[..4] != FRAME_MAGIC {
+        return false;
+    }
+    let descriptor = frame[4];
+    let did_len = DID_FIELD_LEN[usize::from(descriptor & 0b11)];
+    if did_len == 0 {
+        return true;
+    }
+    let single_segment = descriptor & 0x20 != 0;
+    let start = 5 + usize::from(!single_segment);
+    if frame.len() < start + did_len {
+        return false;
+    }
+    frame[4] = descriptor & !0b11;
+    frame.drain(start..start + did_len);
+    true
 }
 
 /// Append exactly `raw_len` decoded bytes to `out`, or fail. The frame must be
@@ -242,5 +287,61 @@ mod tests {
         assert_eq!(&out[..], &data[..]);
         let with_dict = encode(data, 3, Some(&dict)).unwrap();
         assert!(decode(&with_dict, data.len() as u32, None, &mut Vec::new()).is_err());
+    }
+
+    fn chat_samples() -> Vec<Vec<u8>> {
+        (0..300)
+            .map(|i| {
+                format!(
+                    "{{\"id\":\"{}\",\"author\":\"user{}\",\"content\":\"message {i} about the deploy\"}}",
+                    1_190_000_000_000u64 + i * 4099,
+                    i % 11
+                )
+                .into_bytes()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn dictionary_frames_omit_the_dictionary_id() {
+        let samples = chat_samples();
+        let dict = ZstdDict::new(5, train_dictionary(&samples, 2048).unwrap(), 3).unwrap();
+        let data = &samples[17];
+        // Reference frame, as written before: with the Dictionary_ID field.
+        let mut with_id = Vec::with_capacity(zstd_safe::compress_bound(data.len()));
+        CCtx::create().compress_using_cdict(&mut with_id, data, &dict.cdict).unwrap();
+        assert_ne!(with_id[4] & 0b11, 0, "trained dictionaries have an id");
+        let without = encode(data, 3, Some(&dict)).unwrap();
+        assert_eq!(without[4] & 0b11, 0);
+        let did_len = [0, 1, 2, 4][usize::from(with_id[4] & 0b11)];
+        assert_eq!(without.len() + did_len, with_id.len());
+        assert_eq!(zstd_safe::get_dict_id_from_frame(&without), None);
+        // Both forms decode with the dictionary (frames of older writers stay readable).
+        for frame in [&with_id, &without] {
+            let mut out = Vec::new();
+            decode(frame, data.len() as u32, Some(&dict), &mut out).unwrap();
+            assert_eq!(&out, data);
+        }
+        // Frames without a dictionary are left alone; non-frames are refused.
+        let plain = encode(data, 3, None).unwrap();
+        let mut copy = plain.clone();
+        assert!(strip_dict_id(&mut copy) && copy == plain);
+        let mut junk = b"not a frame".to_vec();
+        assert!(!strip_dict_id(&mut junk) && junk == b"not a frame");
+        let mut short = with_id[..6].to_vec();
+        short[4] |= 0b11;
+        assert!(!strip_dict_id(&mut short));
+    }
+
+    #[test]
+    fn reused_buffer_matches_fresh_encoding() {
+        let samples = chat_samples();
+        let dict = ZstdDict::new(5, train_dictionary(&samples, 2048).unwrap(), 3).unwrap();
+        let mut buf = vec![1, 2, 3];
+        for (i, s) in samples.iter().enumerate().take(40) {
+            let d = (i % 2 == 0).then_some(&dict);
+            encode_into(s, 3, d, &mut buf).unwrap();
+            assert_eq!(buf, encode(s, 3, d).unwrap());
+        }
     }
 }

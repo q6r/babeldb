@@ -12,14 +12,23 @@ use crate::format::MAX_UNIT_LEN;
 const MAX_EXPANSION: usize = 255;
 
 pub fn encode(data: &[u8]) -> Vec<u8> {
-    let mut body = vec![0u8; block::get_maximum_output_size(data.len())];
-    match block::compress_into(data, &mut body) {
-        Ok(len) => {
-            body.truncate(len);
-            body
-        }
+    let mut body = Vec::new();
+    encode_into(data, &mut body);
+    body
+}
+
+/// `encode` into a reusable buffer: `out` holds exactly the body afterwards.
+/// Only the part of the buffer beyond its current length is zeroed, so a
+/// buffer reused for inputs of similar size costs no allocation.
+pub fn encode_into(data: &[u8], out: &mut Vec<u8>) {
+    let max = block::get_maximum_output_size(data.len());
+    if out.len() < max {
+        out.resize(max, 0);
+    }
+    match block::compress_into(data, &mut out[..max]) {
+        Ok(len) => out.truncate(len),
         // Unreachable with a buffer of the documented maximum size.
-        Err(_) => block::compress(data),
+        Err(_) => *out = block::compress(data),
     }
 }
 
@@ -75,5 +84,15 @@ mod tests {
         let mut out = vec![1, 2, 3];
         assert!(decode(&body, 5000, &mut out).is_err());
         assert_eq!(out, [1, 2, 3]);
+    }
+
+    #[test]
+    fn reused_buffer_matches_fresh_encoding() {
+        let mut buf = vec![0xAA; 7];
+        for len in [0usize, 1, 50, 3000, 10, 600, 0, 4096] {
+            let data: Vec<u8> = (0..len).map(|i| (i * 7 % 13) as u8).collect();
+            encode_into(&data, &mut buf);
+            assert_eq!(buf, encode(&data), "len {len}");
+        }
     }
 }

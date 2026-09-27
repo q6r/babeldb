@@ -14,6 +14,7 @@
 //! Maintenance/training methods live in `crate::maintenance`, imports in
 //! `crate::ingest` (both as `impl Db` blocks using `ops`).
 
+mod autodict;
 mod inspect;
 pub mod ops;
 mod read;
@@ -33,6 +34,10 @@ use crate::stats::{EngineCounters, Stats};
 use crate::store::redb::RedbStore;
 use crate::store::{Durability, Store, Table, WriteTxn};
 
+pub use autodict::AutoDictStatus;
+pub use read::VALUE_CACHE_SCAN_LIMIT;
+
+use autodict::AutoDict;
 use ops::{ParamCache, ParamEntry};
 
 pub type Revision = u64;
@@ -169,6 +174,8 @@ pub struct Db<S: Store = RedbStore> {
     pub(crate) cache: BlockCache,
     pub(crate) generators: Registry,
     pub(crate) counters: EngineCounters,
+    /// Automatic Zstd dictionary for small values (`config::AutoDictionary`).
+    pub(crate) auto_dict: AutoDict,
 }
 
 impl Db<RedbStore> {
@@ -251,12 +258,14 @@ impl<S: Store> Db<S> {
             };
             (dict, template)
         };
+        let auto_dict = AutoDict::new(&cfg, mode, dict.is_some());
         let planner = Planner::new(mode, cfg.codecs.clone()).with_params(dict, template);
 
         Ok(Db {
             cache: BlockCache::new(cfg.cache_bytes),
             generators: Registry::builtin(),
             counters: EngineCounters::default(),
+            auto_dict,
             planner: RwLock::new(Arc::new(planner)),
             params,
             mode,
@@ -295,11 +304,13 @@ impl<S: Store> Db<S> {
         self.planner.read().map(|p| p.clone()).unwrap_or_else(|e| e.into_inner().clone())
     }
 
+    /// Switch to `p` (new dependencies). The codec counters of the replaced
+    /// planner carry over, so `stats().planner` stays cumulative for the
+    /// session (encodes still finishing on the old planner are not included).
     pub(crate) fn replace_planner(&self, p: Planner) {
-        match self.planner.write() {
-            Ok(mut g) => *g = Arc::new(p),
-            Err(e) => *e.into_inner() = Arc::new(p),
-        }
+        let mut g = self.planner.write().unwrap_or_else(|e| e.into_inner());
+        p.carry_stats_from(&g);
+        *g = Arc::new(p);
     }
 
     /// Dedupe is only active in Adaptive mode.
