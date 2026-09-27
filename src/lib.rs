@@ -22,6 +22,7 @@ pub mod hash;
 pub mod ingest;
 pub mod maintenance;
 pub mod planner;
+pub mod scale;
 pub mod source;
 pub mod stats;
 pub mod store;
