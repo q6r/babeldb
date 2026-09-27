@@ -21,7 +21,7 @@ use babeldb::cli::protocol::{
     self, MAX_FRAME_LEN, ProtocolError, Reply, Request, decode_frame, op, read_frame, write_frame,
 };
 use babeldb::cli::repl::{self, ReplOptions, parse_line, resolve_command};
-use babeldb::cli::server::{self, Client, handle_request};
+use babeldb::cli::server::{self, Client, ServerConfig, handle_request};
 use babeldb::cli::text::{hex_encode, quote, tokenize};
 use babeldb::cli::{self, GlobalOptions, parse_invocation};
 use babeldb::config::Mode;
@@ -29,6 +29,7 @@ use babeldb::engine::{Inspection, UnitInfo};
 use babeldb::format::{ImportInfo, SourceDescriptor};
 use babeldb::maintenance::VerifyReport;
 use babeldb::planner::PlannerSnapshot;
+use babeldb::scale::WriteDurability;
 use babeldb::stats::{CodecUsage, EngineCountersSnapshot, FileSize, Stats};
 use babeldb::{Config, Db, Expect, MemStore, ScanItem};
 use proptest::prelude::*;
@@ -1663,6 +1664,240 @@ fn handle_request_rejects_bad_requests() {
         Reply::Error(m) => assert!(m.contains("bad request"), "{m}"),
         other => panic!("{other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// TCP server: writes through the shared group committer, pipelining
+// ---------------------------------------------------------------------------
+
+fn serve_config(
+    db: Arc<Db<impl babeldb::store::Store>>,
+    cfg: ServerConfig,
+) -> server::ServerHandle {
+    let listener = server::bind("127.0.0.1:0").expect("bind");
+    server::serve_with(db, listener, cfg).expect("serve")
+}
+
+#[test]
+fn server_group_commits_writes_of_many_connections() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Db::open(dir.path().join("gc.redb"), Config::default()).unwrap());
+    let handle = serve_config(Arc::clone(&db), ServerConfig::new(8));
+    let addr = handle.local_addr();
+    // 8 connections writing at once: durable replies, every value in place.
+    std::thread::scope(|s| {
+        for t in 0..8u32 {
+            s.spawn(move || {
+                let mut c = client(addr);
+                let mut last = 0;
+                for i in 0..25u32 {
+                    let rev = c
+                        .put(format!("t{t}/{i}").as_bytes(), &[t as u8; 100])
+                        .unwrap();
+                    assert!(rev > last, "revisions of one connection increase");
+                    last = rev;
+                }
+            });
+        }
+    });
+    // One connection pipelining 64 PUTs: all submitted before the first
+    // reply, so they share commits.
+    let mut c = client(addr);
+    let keys: Vec<Vec<u8>> = (0..64).map(|i| format!("p/{i:02}").into_bytes()).collect();
+    let items: Vec<(&[u8], &[u8])> = keys.iter().map(|k| (&k[..], &b"pipelined"[..])).collect();
+    let before = handle.stats().commit;
+    let revs = c.put_many(&items).unwrap();
+    let after = handle.stats().commit;
+    assert_eq!(revs.len(), 64);
+    assert!(revs.windows(2).all(|w| w[0] < w[1]), "applied in order");
+    assert_eq!(after.ops - before.ops, 64);
+    assert!(
+        after.batches - before.batches < 64,
+        "64 pipelined puts took {} commits",
+        after.batches - before.batches
+    );
+    drop(c);
+    let stats = handle.stop();
+    assert_eq!(stats.commit.ops, 8 * 25 + 64);
+    assert_eq!(stats.commit.failed_batches, 0);
+    assert_eq!(stats.commit.immediate_batches, stats.commit.batches);
+    for t in 0..8u32 {
+        for i in 0..25u32 {
+            let v = db.get(format!("t{t}/{i}").as_bytes()).unwrap();
+            assert_eq!(v.as_deref(), Some(&[t as u8; 100][..]));
+        }
+    }
+    assert_eq!(db.get(b"p/63").unwrap().as_deref(), Some(&b"pipelined"[..]));
+    // The stopped server released the database.
+    assert_eq!(Arc::strong_count(&db), 1);
+}
+
+#[test]
+fn server_pipelined_requests_keep_order_and_read_their_writes() {
+    let handle = server::serve(Arc::new(mem_db()), "127.0.0.1:0", 2).expect("serve");
+    let mut c = client(handle.local_addr());
+    let requests = [
+        Request::Put {
+            key: b"a",
+            value: b"1",
+        },
+        Request::Get { key: b"a" },
+        Request::Put {
+            key: b"a",
+            value: b"2",
+        },
+        Request::Get { key: b"a" },
+        Request::Delete { key: b"a" },
+        Request::Get { key: b"a" },
+        Request::Delete { key: b"a" },
+        Request::Ping,
+        Request::PutBatch {
+            items: vec![(&b"b"[..], &b"x"[..]), (&b"c"[..], &b"y"[..])],
+        },
+        Request::Get { key: b"c" },
+        Request::Put {
+            key: b"",
+            value: b"v",
+        },
+        Request::ScanPrefix {
+            prefix: b"",
+            limit: 0,
+            reverse: false,
+            with_values: true,
+        },
+    ];
+    let replies = c.pipeline(&requests).unwrap();
+    assert_eq!(replies.len(), requests.len());
+    let (r1, r2) = match (&replies[0], &replies[2]) {
+        (Reply::Revision(r1), Reply::Revision(r2)) => (*r1, *r2),
+        other => panic!("{other:?}"),
+    };
+    assert!(r2 > r1);
+    assert_eq!(replies[1], Reply::Value(b"1".to_vec()));
+    assert_eq!(replies[3], Reply::Value(b"2".to_vec()));
+    assert_eq!(replies[4], Reply::Done);
+    assert_eq!(replies[5], Reply::NotFound);
+    assert_eq!(replies[6], Reply::NotFound);
+    assert_eq!(replies[7], Reply::Done);
+    match &replies[8] {
+        Reply::Revisions(revs) => {
+            assert_eq!(revs.len(), 2);
+            assert!(revs[0] > r2 && revs[1] == revs[0] + 1, "{revs:?}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(replies[9], Reply::Value(b"y".to_vec()));
+    match &replies[10] {
+        Reply::Error(m) => assert!(m.contains("empty key"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+    match &replies[11] {
+        Reply::Items(items) => {
+            let keys: Vec<&[u8]> = items.iter().map(|i| i.key.as_slice()).collect();
+            assert_eq!(keys, [&b"b"[..], b"c"]);
+        }
+        other => panic!("{other:?}"),
+    }
+    // The connection is still in step.
+    c.ping().unwrap();
+    assert_eq!(c.get(b"b").unwrap().as_deref(), Some(&b"x"[..]));
+    let stats = handle.stop();
+    assert_eq!(stats.requests, requests.len() as u64 + 2);
+    assert_eq!(stats.error_replies, 1);
+}
+
+#[test]
+fn server_put_batch_is_all_or_nothing_and_one_commit() {
+    let db = Arc::new(mem_db());
+    let handle = server::serve(Arc::clone(&db), "127.0.0.1:0", 2).expect("serve");
+    let mut c = client(handle.local_addr());
+    // One invalid item rejects the whole batch: nothing is applied.
+    match c.put_batch(&[(&b"k1"[..], &b"v1"[..]), (&b""[..], &b"v2"[..])]) {
+        Err(ProtocolError::Remote(m)) => assert!(m.contains("empty key"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(db.get(b"k1").unwrap(), None);
+    assert_eq!(handle.stats().commit.requests, 0);
+    // A valid batch is one committer request and one commit, never split.
+    let items: Vec<(Vec<u8>, Vec<u8>)> = (0..100u32)
+        .map(|i| (format!("k/{i:03}").into_bytes(), vec![i as u8; 10]))
+        .collect();
+    let refs: Vec<(&[u8], &[u8])> = items.iter().map(|(k, v)| (&k[..], &v[..])).collect();
+    let revs = c.put_batch(&refs).unwrap();
+    assert_eq!(revs.len(), 100);
+    assert!(revs.windows(2).all(|w| w[1] == w[0] + 1), "{revs:?}");
+    let stats = handle.stats().commit;
+    assert_eq!((stats.requests, stats.batches, stats.ops), (1, 1, 100));
+    assert_eq!(db.get(b"k/099").unwrap(), Some(vec![99u8; 10]));
+    assert_eq!(c.put_batch(&[]).unwrap(), Vec::<u64>::new());
+    handle.stop();
+}
+
+#[test]
+fn server_stop_drains_buffered_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("buffered.redb");
+    let db = Arc::new(Db::open(&path, Config::default()).unwrap());
+    // Buffered acknowledgements with a flush interval that never elapses in
+    // the test: only the stop makes the writes durable.
+    let cfg = ServerConfig::new(2).with_durability(WriteDurability::Buffered {
+        flush_interval: Duration::from_secs(3600),
+        max_pending_bytes: 1 << 30,
+    });
+    let handle = serve_config(Arc::clone(&db), cfg);
+    assert!(handle.commit_config().durability.is_buffered());
+    let mut c = client(handle.local_addr());
+    for i in 0..20u32 {
+        c.put(format!("b/{i:02}").as_bytes(), b"buffered").unwrap();
+    }
+    assert!(c.delete(b"b/00").unwrap());
+    let running = handle.stats().commit;
+    assert!(running.deferred_batches > 0);
+    assert!(running.unsynced_bytes > 0, "{running:?}");
+    drop(c);
+    let stats = handle.shutdown().expect("clean shutdown");
+    assert_eq!(stats.commit.unsynced_bytes, 0, "{:?}", stats.commit);
+    assert!(stats.commit.syncs + stats.commit.immediate_batches > 0);
+    // The server released the database; reopening finds every write.
+    let db = Arc::try_unwrap(db).ok().expect("sole owner after shutdown");
+    drop(db);
+    let db = Db::open(&path, Config::default()).unwrap();
+    assert_eq!(db.get(b"b/00").unwrap(), None);
+    assert_eq!(db.get(b"b/19").unwrap().as_deref(), Some(&b"buffered"[..]));
+}
+
+#[test]
+fn client_pipeline_windows_large_bursts() {
+    let db = Arc::new(mem_db());
+    let key = |i: u8| {
+        let mut k = vec![b'k'; 64];
+        k[63] = i;
+        k
+    };
+    for i in 0..4u8 {
+        db.put(&key(i), &vec![i; 16 * 1024], Expect::Any).unwrap();
+    }
+    let handle = server::serve(Arc::clone(&db), "127.0.0.1:0", 2).expect("serve");
+    let mut c = client(handle.local_addr());
+    // 2000 GETs (146 KB of requests: several windows) answered by 32 MB of
+    // replies: the client never has more than a window in flight, so neither
+    // side blocks forever on full socket buffers.
+    let keys: Vec<Vec<u8>> = (0..2000u32).map(|i| key((i % 4) as u8)).collect();
+    let refs: Vec<&[u8]> = keys.iter().map(|k| &k[..]).collect();
+    let values = c.get_many(&refs).unwrap();
+    assert_eq!(values.len(), 2000);
+    for (k, v) in keys.iter().zip(&values) {
+        assert_eq!(v.as_deref(), Some(&vec![k[63]; 16 * 1024][..]));
+    }
+    // Misuse is reported without desynchronizing the connection.
+    c.queue(&Request::Ping).unwrap();
+    assert_eq!(c.pending(), 1);
+    assert!(matches!(c.call(&Request::Ping), Err(ProtocolError::Io(_))));
+    assert_eq!(c.recv().unwrap(), Reply::Done);
+    assert_eq!(c.pending(), 0);
+    assert!(matches!(c.recv(), Err(ProtocolError::Io(_))));
+    c.ping().unwrap();
+    assert_eq!(handle.stop().requests, 2002);
 }
 
 // ---------------------------------------------------------------------------

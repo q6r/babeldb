@@ -10,44 +10,61 @@
 //! PostgreSQL and MongoDB servers; nothing else on them is touched.
 //!
 //! Systems (same messages, same operations):
-//! - `babel-raw`, `babel-adaptive`: `Db<RedbStore>` in-process (no network;
-//!   `Config::raw_only()` vs `Config::adaptive()`), writes through a
-//!   `GroupCommitter` (one commit per batch of concurrent writes).
-//! - `babel-tcp`: the adaptive engine behind the babeldb TCP server
-//!   (`cli::server`, localhost, binary protocol): the like-for-like comparison
-//!   with the client/server databases.
+//! - `babel-raw`, `babel-adaptive`, `babel-dict`: `Db<RedbStore>` in-process
+//!   (no network; `Config::raw_only()`, `Config::adaptive()`, and adaptive
+//!   with a zstd dictionary trained by `Db::train_dictionary` on the first
+//!   2,000 messages before the load), writes through a `GroupCommitter` (one
+//!   commit per batch of concurrent writes).
+//! - `babel-tcp`, `babel-tcp-raw` (and `babel-tcp-dict`): the same engines
+//!   behind the babeldb TCP server (`cli::server`, localhost, binary protocol;
+//!   every connection's writes share the server's group committer): the
+//!   like-for-like comparison with the client/server databases.
 //! - `postgres`: `messages(channel_id bigint, id bigint, payload bytea,
 //!   primary key (channel_id, id))`, prepared statements, one connection per thread.
 //! - `mongo`: collection `messages`, `_id = {c, m}` (both int64), `p` = BinData
 //!   (exact bytes), one pooled client.
+//! - `tcp-floor` (not in the default list): the loopback floor of the
+//!   babeldb client, i.e. `cli::server::Client` against a trivial server that
+//!   answers every GET / SCAN_PREFIX with a pre-encoded reply of the same size
+//!   (no engine, no dispatch); only the read phases run.
 //!
 //! Durability, default `durable`: babeldb `Immediate` commits (one
 //! FlushFileBuffers per commit), PostgreSQL `synchronous_commit = on` (WAL
 //! flush per commit, group commit across connections), MongoDB write concern
 //! `{w: 1, j: true}` (journal flush). `--relaxed` runs the non-durable
 //! counterparts instead: babeldb `Buffered` group commit (Deferred commits,
-//! periodic sync), PostgreSQL `synchronous_commit = off`, MongoDB `{w: 1, j: false}`.
+//! periodic sync; the TCP server acknowledges the same way), PostgreSQL
+//! `synchronous_commit = off`, MongoDB `{w: 1, j: false}`.
 //!
 //! Phases: `load` (bulk: `write_batch` / `COPY BINARY` / `insert_many`, 1000 per
-//! batch), `space` (bytes on disk after load), `put` (sequential single-message
-//! commits), `put-mt` (T writer threads), `get` / `get-mt` (point reads by
-//! (channel, id); uniform over loaded messages), `latest` / `latest-mt`
-//! (newest 50 messages of a channel; channels weighted by message count).
-//! Every 64th read is compared byte for byte with the expected payload.
+//! batch), `space` (bytes on disk after load), `space-compacted` (babeldb only:
+//! the same after `Db::compact`, with the database no longer shared; the
+//! following phases run on the compacted file; `--no-compact` skips it), `put`
+//! (sequential single-message commits), `put-mt` (T writer threads), `get` /
+//! `get-mt` (point reads by (channel, id); uniform over loaded messages),
+//! `latest` / `latest-mt` (newest 50 messages of a channel; channels weighted
+//! by message count). With `--pipeline N` the TCP systems also run `put-pipeN`
+//! and `get-pipeN`: one connection sends N requests before reading their N
+//! replies (the protocol answers in order); ops/s counts requests, latencies
+//! are per batch of N. Every 64th read is compared byte for byte with the
+//! expected payload.
 
 use std::error::Error as StdError;
 use std::fs::OpenOptions;
-use std::io::Write as _;
-use std::net::SocketAddr;
+use std::io::{BufReader, Write as _};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 use std::time::{Duration, Instant};
 
-use babeldb::cli::server::{self, Client as BabelClient, ServerHandle};
+use babeldb::cli::protocol::{self, Reply, op};
+use babeldb::cli::server::{self, Client as BabelClient, ServerConfig, ServerHandle};
 use babeldb::datasets::{self, Scenario, SplitMix64};
+use babeldb::planner::TrainOptions;
 use babeldb::scale::chat::message_key;
 use babeldb::scale::group_commit::{GroupCommitConfig, GroupCommitter, WriteDurability};
-use babeldb::{BatchOp, Config, Db, Expect, ScanOptions};
+use babeldb::{BatchOp, Config, Db, Expect, ScanItem, ScanOptions};
 use mongodb::bson::spec::BinarySubtype;
 use mongodb::bson::{Binary, Bson, Document, doc};
 use mongodb::options::{Acknowledgment, CollectionOptions, WriteConcern};
@@ -57,6 +74,8 @@ type R<T> = Result<T, Box<dyn StdError + Send + Sync>>;
 const LOAD_BATCH: usize = 1000;
 const LATEST_N: usize = 50;
 const VERIFY_EVERY: usize = 64;
+/// `babel-dict`: messages the zstd dictionary is trained on, before the load.
+const DICT_SAMPLES: u64 = 2000;
 
 // ---------------------------------------------------------------------------
 // Workload
@@ -89,6 +108,10 @@ struct Params {
     read_ops: usize,
     read_threads: Vec<usize>,
     relaxed: bool,
+    /// Compact babeldb after the load (`space-compacted`).
+    compact: bool,
+    /// Depth of the pipelined TCP phases (0 = not run).
+    pipeline: usize,
     dir: PathBuf,
     out: Option<PathBuf>,
     pg_url: Option<String>,
@@ -105,7 +128,9 @@ impl Default for Params {
             systems: vec![
                 "babel-raw".into(),
                 "babel-adaptive".into(),
+                "babel-dict".into(),
                 "babel-tcp".into(),
+                "babel-tcp-raw".into(),
                 "postgres".into(),
                 "mongo".into(),
             ],
@@ -115,6 +140,8 @@ impl Default for Params {
             read_ops: 20_000,
             read_threads: vec![1, 4, 16],
             relaxed: false,
+            compact: true,
+            pipeline: 0,
             dir: PathBuf::from("bench-results/tmp-compare"),
             out: Some(PathBuf::from("bench-results/compare.jsonl")),
             pg_url: std::env::var("BABEL_PG_URL").ok(),
@@ -162,6 +189,8 @@ fn parse_args() -> R<Params> {
             "--read-ops" => p.read_ops = parse_count(&val()?)? as usize,
             "--read-threads" => p.read_threads = parse_list(&val()?)?,
             "--relaxed" => p.relaxed = true,
+            "--no-compact" => p.compact = false,
+            "--pipeline" => p.pipeline = parse_count(&val()?)? as usize,
             "--dir" => p.dir = PathBuf::from(val()?),
             "--out" => p.out = Some(PathBuf::from(val()?)),
             "--no-out" => p.out = None,
@@ -170,9 +199,11 @@ fn parse_args() -> R<Params> {
             "--help" | "-h" => {
                 println!(
                     "flags: --records N [100k] --value-size B [512] --systems LIST \
-                     [babel-raw,babel-adaptive,babel-tcp,postgres,mongo] --put-ops N [300] \
+                     [babel-raw,babel-adaptive,babel-dict,babel-tcp,babel-tcp-raw,postgres,mongo; \
+                     also babel-tcp-dict, tcp-floor] --put-ops N [300] \
                      --put-threads LIST [1,4,16,64] --put-mt-ops N [200] --read-ops N [20k] \
-                     --read-threads LIST [1,4,16] --relaxed --dir PATH --out PATH --no-out \
+                     --read-threads LIST [1,4,16] --relaxed --no-compact --pipeline N [off] \
+                     --dir PATH --out PATH --no-out \
                      --mongo-url URL --tag TEXT; env BABEL_PG_URL (libpq key=value string)"
                 );
                 std::process::exit(0);
@@ -216,7 +247,8 @@ fn fmt_us(us: f64) -> String {
 
 struct Report {
     rows: Vec<(String, Sample)>,
-    space: Vec<(String, u64, String)>,
+    /// (system, phase, bytes, what)
+    space: Vec<(String, &'static str, u64, String)>,
     out: Option<std::fs::File>,
     params: Params,
 }
@@ -256,16 +288,17 @@ impl Report {
         self.rows.push((system.to_string(), s));
     }
 
-    fn add_space(&mut self, system: &str, bytes: u64, what: String) {
-        println!("[{system}] space      {:>10.2} MB  ({what})", bytes as f64 / 1e6);
+    /// `phase`: "space" or "space-compacted".
+    fn add_space(&mut self, system: &str, phase: &'static str, bytes: u64, what: String) {
+        println!("[{system}] {phase:<10} {:>10.2} MB  ({what})", bytes as f64 / 1e6);
         if let Some(f) = self.out.as_mut() {
             let _ = writeln!(
                 f,
-                "{{\"tag\":\"{}\",\"system\":\"{system}\",\"records\":{},\"value_size\":{},\"phase\":\"space\",\"bytes\":{bytes},\"what\":\"{what}\"}}",
+                "{{\"tag\":\"{}\",\"system\":\"{system}\",\"records\":{},\"value_size\":{},\"phase\":\"{phase}\",\"bytes\":{bytes},\"what\":\"{what}\"}}",
                 self.params.tag, self.params.records, self.params.value_size
             );
         }
-        self.space.push((system.to_string(), bytes, what));
+        self.space.push((system.to_string(), phase, bytes, what));
     }
 }
 
@@ -279,43 +312,174 @@ trait Session: Send {
     fn put(&mut self, m: &Msg) -> R<()>;
     fn get(&mut self, channel: u64, id: u64) -> R<Option<Vec<u8>>>;
     fn latest(&mut self, channel: u64, n: usize) -> R<Vec<(u64, Vec<u8>)>>;
+
+    /// Many single-message puts; pipelined where the protocol allows it.
+    fn put_many(&mut self, ms: &[Msg]) -> R<()> {
+        ms.iter().try_for_each(|m| self.put(m))
+    }
+
+    /// Many point reads (channel, id); pipelined where the protocol allows it.
+    fn get_many(&mut self, keys: &[(u64, u64)]) -> R<Vec<Option<Vec<u8>>>> {
+        keys.iter().map(|&(c, id)| self.get(c, id)).collect()
+    }
 }
 
 trait Target: Sync {
     fn session(&self) -> R<Box<dyn Session>>;
     /// Bytes on disk used by the loaded data, and what they include.
     fn space(&self) -> R<(u64, String)>;
+    /// Compact the storage and measure it again (`None`: not supported).
+    fn compact(&mut self) -> R<Option<(u64, String)>> {
+        Ok(None)
+    }
+    /// Whether sessions pipeline `put_many` / `get_many` (TCP systems).
+    fn pipelines(&self) -> bool {
+        false
+    }
     fn close(self: Box<Self>) -> R<()>;
 }
 
-// --- babeldb in-process ----------------------------------------------------
+// --- babeldb in-process and behind its TCP server ----------------------------
 
-struct BabelTarget {
-    db: Arc<Db>,
-    committer: Arc<GroupCommitter>,
-    server: Mutex<Option<(ServerHandle, SocketAddr)>>,
+/// Engine flavour of a `babel-*` system.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BabelEngine {
+    Raw,
+    Adaptive,
+    /// Adaptive + a zstd dictionary trained before the load.
+    Dict,
 }
 
-fn babel_open(p: &Params, name: &str, cfg: Config, tcp_threads: Option<usize>) -> R<BabelTarget> {
+/// `babel-*` system names: (engine, behind the TCP server).
+fn babel_system(name: &str) -> Option<(BabelEngine, bool)> {
+    Some(match name {
+        "babel-raw" => (BabelEngine::Raw, false),
+        "babel-adaptive" => (BabelEngine::Adaptive, false),
+        "babel-dict" => (BabelEngine::Dict, false),
+        "babel-tcp" => (BabelEngine::Adaptive, true),
+        "babel-tcp-raw" => (BabelEngine::Raw, true),
+        "babel-tcp-dict" => (BabelEngine::Dict, true),
+        _ => return None,
+    })
+}
+
+/// The database is owned here; the in-process committer (or the TCP server
+/// and its committer) hold clones of the `Arc` only while running, so
+/// `compact` can stop them and get the database back exclusively.
+struct BabelTarget {
+    db: Arc<Db>,
+    durability: WriteDurability,
+    /// `Some(workers)`: sessions go through the TCP server.
+    tcp_threads: Option<usize>,
+    /// In-process group committer (in-process systems, while running).
+    committer: Option<Arc<GroupCommitter>>,
+    /// TCP server and its address (TCP systems, while running).
+    server: Option<(ServerHandle, SocketAddr)>,
+}
+
+fn babel_open(p: &Params, name: &str, engine: BabelEngine, tcp: bool, tcp_threads: usize) -> R<BabelTarget> {
     let dir = p.dir.join(name);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)?;
-    let db = Arc::new(Db::open(dir.join("babel.redb"), cfg)?);
+    let cfg = match engine {
+        BabelEngine::Raw => Config::raw_only(),
+        BabelEngine::Adaptive | BabelEngine::Dict => Config::adaptive(),
+    };
+    let db = Db::open(dir.join("babel.redb"), cfg)?;
+    if engine == BabelEngine::Dict {
+        // Trained on the first messages of the workload, before anything is
+        // measured (the load below then encodes every message with it).
+        let samples: Vec<Vec<u8>> = (0..DICT_SAMPLES.min(p.records)).map(|i| msg(p.seed, i, p.value_size).payload).collect();
+        let opts = TrainOptions { expected_uses: p.records.max(1), ..TrainOptions::default() };
+        let t0 = Instant::now();
+        let rep = db.train_dictionary(&samples, &opts)?;
+        println!(
+            "[{name}] dict       {} B zstd dictionary from {} samples in {:.2}s (validation {} -> {} B, installed: {})",
+            rep.param_bytes,
+            rep.train_samples,
+            t0.elapsed().as_secs_f64(),
+            rep.validation_bytes_without,
+            rep.validation_bytes_with,
+            rep.installed
+        );
+    }
     let durability = if p.relaxed {
         WriteDurability::Buffered { flush_interval: Duration::from_millis(100), max_pending_bytes: 64 << 20 }
     } else {
         WriteDurability::Immediate
     };
-    let committer = Arc::new(GroupCommitter::new(db.clone(), GroupCommitConfig::from(durability))?);
-    let server = match tcp_threads {
-        Some(threads) => {
-            let listener = server::bind("127.0.0.1:0")?;
-            let addr = listener.local_addr()?;
-            Some((server::serve_listener(db.clone(), listener, threads)?, addr))
-        }
-        None => None,
+    let mut target = BabelTarget {
+        db: Arc::new(db),
+        durability,
+        tcp_threads: tcp.then_some(tcp_threads),
+        committer: None,
+        server: None,
     };
-    Ok(BabelTarget { db, committer, server: Mutex::new(server) })
+    target.start()?;
+    Ok(target)
+}
+
+impl BabelTarget {
+    /// Start the committer, or the TCP server (which has its own).
+    fn start(&mut self) -> R<()> {
+        match self.tcp_threads {
+            Some(threads) => {
+                let listener = server::bind("127.0.0.1:0")?;
+                let addr = listener.local_addr()?;
+                let cfg = ServerConfig::new(threads).with_durability(self.durability);
+                self.server = Some((server::serve_with(self.db.clone(), listener, cfg)?, addr));
+            }
+            None => {
+                let cfg = GroupCommitConfig::from(self.durability);
+                self.committer = Some(Arc::new(GroupCommitter::new(self.db.clone(), cfg)?));
+            }
+        }
+        Ok(())
+    }
+
+    /// Stop the server / committer: every accepted write is committed (and
+    /// made durable) and their `Arc<Db>` clones are released.
+    fn stop(&mut self) -> R<()> {
+        if let Some((handle, _)) = self.server.take() {
+            handle.shutdown()?;
+        }
+        if let Some(committer) = self.committer.take() {
+            committer.shutdown()?;
+        }
+        Ok(())
+    }
+
+    fn describe_space(&self, what: &str) -> R<(u64, String)> {
+        let s = self.db.stats()?;
+        let alloc = s.file_allocated_bytes().unwrap_or_else(|| s.file_apparent_bytes());
+        Ok((
+            alloc,
+            format!(
+                "{what} (apparent {:.2} MB, engine payload {:.2} MB)",
+                s.file_apparent_bytes() as f64 / 1e6,
+                s.payload_bytes() as f64 / 1e6
+            ),
+        ))
+    }
+
+    /// After `Db::compact` the file is shorter, but while it stays open NTFS
+    /// still reports the allocation of the larger file redb grew during the
+    /// compaction (measured: 104 MB apparent, 209 MB allocated; both 104 MB
+    /// once closed). The settled size is the smaller of the two.
+    fn describe_compacted(&self, took: Duration) -> R<(u64, String)> {
+        let s = self.db.stats()?;
+        let apparent = s.file_apparent_bytes();
+        let settled = s.file_allocated_bytes().map_or(apparent, |a| a.min(apparent));
+        Ok((
+            settled,
+            format!(
+                "redb file after Db::compact in {:.2}s: min(apparent, allocated) (allocated while open {:.2} MB, engine payload {:.2} MB)",
+                took.as_secs_f64(),
+                s.file_allocated_bytes().unwrap_or(apparent) as f64 / 1e6,
+                s.payload_bytes() as f64 / 1e6
+            ),
+        ))
+    }
 }
 
 struct BabelSession {
@@ -379,41 +543,74 @@ impl Session for BabelTcpSession {
 
     fn latest(&mut self, channel: u64, n: usize) -> R<Vec<(u64, Vec<u8>)>> {
         let items = self.client.scan_prefix(&channel.to_be_bytes(), n as u32, true, true)?;
-        Ok(items
-            .into_iter()
-            .map(|it| (u64::from_be_bytes(it.key[8..16].try_into().unwrap()), it.value.unwrap_or_default()))
-            .collect())
+        Ok(latest_pairs(items))
     }
+
+    fn put_many(&mut self, ms: &[Msg]) -> R<()> {
+        let keys: Vec<[u8; 16]> = ms.iter().map(|m| message_key(m.channel, m.id)).collect();
+        let items: Vec<(&[u8], &[u8])> = ms.iter().zip(&keys).map(|(m, k)| (&k[..], &m.payload[..])).collect();
+        self.client.put_many(&items)?;
+        Ok(())
+    }
+
+    fn get_many(&mut self, keys: &[(u64, u64)]) -> R<Vec<Option<Vec<u8>>>> {
+        let keys: Vec<[u8; 16]> = keys.iter().map(|&(c, id)| message_key(c, id)).collect();
+        let refs: Vec<&[u8]> = keys.iter().map(|k| &k[..]).collect();
+        Ok(self.client.get_many(&refs)?)
+    }
+}
+
+/// (message id, payload) of scanned `channel BE || id BE` items.
+fn latest_pairs(items: Vec<ScanItem>) -> Vec<(u64, Vec<u8>)> {
+    items
+        .into_iter()
+        .map(|it| (u64::from_be_bytes(it.key[8..16].try_into().unwrap()), it.value.unwrap_or_default()))
+        .collect()
 }
 
 impl Target for BabelTarget {
     fn session(&self) -> R<Box<dyn Session>> {
-        if let Some((_, addr)) = self.server.lock().unwrap().as_ref() {
+        if let Some((_, addr)) = &self.server {
             return Ok(Box::new(BabelTcpSession { client: BabelClient::connect(addr)? }));
         }
-        Ok(Box::new(BabelSession { db: self.db.clone(), committer: self.committer.clone() }))
+        let committer = self.committer.clone().ok_or("babeldb target is stopped")?;
+        Ok(Box::new(BabelSession { db: self.db.clone(), committer }))
     }
 
     fn space(&self) -> R<(u64, String)> {
-        self.committer.flush()?;
-        let s = self.db.stats()?;
-        let alloc = s.file_allocated_bytes().unwrap_or_else(|| s.file_apparent_bytes());
-        Ok((
-            alloc,
-            format!(
-                "redb file allocated (apparent {:.2} MB, engine payload {:.2} MB)",
-                s.file_apparent_bytes() as f64 / 1e6,
-                s.payload_bytes() as f64 / 1e6
-            ),
-        ))
+        if let Some((handle, _)) = &self.server {
+            handle.flush()?;
+        }
+        if let Some(committer) = &self.committer {
+            committer.flush()?;
+        }
+        self.describe_space("redb file allocated")
     }
 
-    fn close(self: Box<Self>) -> R<()> {
-        if let Some((handle, _)) = self.server.lock().unwrap().take() {
-            handle.stop();
+    fn compact(&mut self) -> R<Option<(u64, String)>> {
+        self.stop()?;
+        let t0 = Instant::now();
+        // No session, committer or server holds a clone any more.
+        let compacted: R<babeldb::maintenance::CompactReport> = match Arc::get_mut(&mut self.db) {
+            Some(db) => db.compact().map_err(Into::into),
+            None => Err("the database is still shared: Db::compact needs it exclusively".into()),
+        };
+        let took = t0.elapsed();
+        let restarted = self.start();
+        let report = compacted?;
+        restarted?;
+        if !report.supported {
+            return Ok(None);
         }
-        self.committer.shutdown()?;
-        Ok(())
+        Ok(Some(self.describe_compacted(took)?))
+    }
+
+    fn pipelines(&self) -> bool {
+        self.server.is_some()
+    }
+
+    fn close(mut self: Box<Self>) -> R<()> {
+        self.stop()
     }
 }
 
@@ -614,6 +811,113 @@ impl Target for MongoTarget {
     }
 }
 
+// --- loopback floor (tcp-floor) --------------------------------------------
+
+/// A trivial server: every GET is answered with a pre-encoded VALUE reply of
+/// `value_size` bytes, every SCAN_PREFIX with a pre-encoded 50-item reply,
+/// anything else with DONE; replies of already buffered requests go out in
+/// one write. No engine, no dispatch, no stop polling: what remains is the
+/// babeldb client, the framing and the loopback.
+struct FloorTarget {
+    addr: SocketAddr,
+    stop: Arc<AtomicBool>,
+    acceptor: Option<std::thread::JoinHandle<()>>,
+}
+
+/// (GET reply, SCAN_PREFIX reply, other reply), frames included.
+type FloorReplies = (Vec<u8>, Vec<u8>, Vec<u8>);
+
+fn floor_open(p: &Params) -> R<FloorTarget> {
+    let payload = msg(p.seed, 0, p.value_size).payload;
+    let mut get_reply = Vec::new();
+    Reply::Value(payload.clone()).encode(&mut get_reply)?;
+    let items: Vec<ScanItem> = (0..LATEST_N as u64)
+        .map(|j| ScanItem {
+            key: message_key(1, LATEST_N as u64 - j).to_vec(),
+            revision: j + 1,
+            logical_len: payload.len() as u64,
+            value: Some(payload.clone()),
+        })
+        .collect();
+    let mut scan_reply = Vec::new();
+    Reply::Items(items).encode(&mut scan_reply)?;
+    let mut other_reply = Vec::new();
+    Reply::Done.encode(&mut other_reply)?;
+    let replies: Arc<FloorReplies> = Arc::new((get_reply, scan_reply, other_reply));
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let addr = listener.local_addr()?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let acceptor = {
+        let stop = stop.clone();
+        std::thread::Builder::new().name("floor-acceptor".into()).spawn(move || {
+            let mut conns = Vec::new();
+            for stream in listener.incoming() {
+                if stop.load(Ordering::SeqCst) {
+                    break;
+                }
+                let Ok(stream) = stream else { continue };
+                let replies = replies.clone();
+                conns.push(std::thread::spawn(move || floor_serve(stream, &replies)));
+            }
+            // Connections end when their clients (the sessions) close.
+            for c in conns {
+                let _ = c.join();
+            }
+        })?
+    };
+    Ok(FloorTarget { addr, stop, acceptor: Some(acceptor) })
+}
+
+/// Whether `buf` starts with a complete frame.
+fn frame_complete(buf: &[u8]) -> bool {
+    buf.len() >= protocol::LEN_PREFIX
+        && buf.len() - protocol::LEN_PREFIX >= u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize
+}
+
+fn floor_serve(stream: TcpStream, replies: &FloorReplies) {
+    let _ = stream.set_nodelay(true);
+    let Ok(mut writer) = stream.try_clone() else { return };
+    let mut reader = BufReader::with_capacity(64 * 1024, stream);
+    let (mut body, mut out) = (Vec::new(), Vec::new());
+    while let Ok(true) = protocol::read_frame(&mut reader, &mut body) {
+        out.extend_from_slice(match body.first() {
+            Some(&op::GET) => &replies.0,
+            Some(&op::SCAN_PREFIX) => &replies.1,
+            _ => &replies.2,
+        });
+        if !frame_complete(reader.buffer()) {
+            if writer.write_all(&out).is_err() {
+                break;
+            }
+            out.clear();
+        }
+    }
+}
+
+impl Target for FloorTarget {
+    fn session(&self) -> R<Box<dyn Session>> {
+        // GET and SCAN_PREFIX behave as against babel-tcp; writes are refused.
+        Ok(Box::new(BabelTcpSession { client: BabelClient::connect(self.addr)? }))
+    }
+
+    fn space(&self) -> R<(u64, String)> {
+        Err("tcp-floor stores nothing".into())
+    }
+
+    fn pipelines(&self) -> bool {
+        true
+    }
+
+    fn close(mut self: Box<Self>) -> R<()> {
+        self.stop.store(true, Ordering::SeqCst);
+        let _ = TcpStream::connect(self.addr);
+        if let Some(acceptor) = self.acceptor.take() {
+            let _ = acceptor.join();
+        }
+        Ok(())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Phases
 // ---------------------------------------------------------------------------
@@ -694,14 +998,18 @@ struct ReadIn {
 
 fn run_system(p: &Params, name: &str, report: &mut Report) -> R<()> {
     println!("== {name} ({} records x {} B, {})", p.records, p.value_size, if p.relaxed { "relaxed" } else { "durable" });
+    if name == "tcp-floor" {
+        let target = floor_open(p)?;
+        let result = read_phases(p, name, &target, report, false);
+        Box::new(target).close()?;
+        return result;
+    }
     let max_threads = p.put_threads.iter().chain(&p.read_threads).copied().max().unwrap_or(1);
-    let target: Box<dyn Target> = match name {
-        "babel-raw" => Box::new(babel_open(p, name, Config::raw_only(), None)?),
-        "babel-adaptive" => Box::new(babel_open(p, name, Config::adaptive(), None)?),
-        "babel-tcp" => Box::new(babel_open(p, name, Config::adaptive(), Some(max_threads + 2))?),
-        "postgres" => Box::new(pg_open(p)?),
-        "mongo" => Box::new(mongo_open(p)?),
-        other => return Err(format!("unknown system {other}").into()),
+    let mut target: Box<dyn Target> = match (babel_system(name), name) {
+        (Some((engine, tcp)), _) => Box::new(babel_open(p, name, engine, tcp, max_threads + 2)?),
+        (None, "postgres") => Box::new(pg_open(p)?),
+        (None, "mongo") => Box::new(mongo_open(p)?),
+        (None, other) => return Err(format!("unknown system {other}").into()),
     };
 
     // bulk load, 1000 messages per batch (batch generation is not timed)
@@ -730,10 +1038,18 @@ fn run_system(p: &Params, name: &str, report: &mut Report) -> R<()> {
         report.add(name, sample);
     }
     let (bytes, what) = target.space()?;
-    report.add_space(name, bytes, what);
+    report.add_space(name, "space", bytes, what);
+    if p.compact {
+        match target.compact() {
+            Ok(Some((bytes, what))) => report.add_space(name, "space-compacted", bytes, what),
+            Ok(None) => {}
+            Err(e) => println!("[{name}] space-compacted ERROR: {e}"),
+        }
+    }
 
     // single-message commits: 1 thread, then T threads (fresh ids, never loaded)
     let fresh = |round: u64, t: usize, k: usize| p.records + 10_000_000 * (round + 1) + (t * 100_000 + k) as u64;
+    let rounds = p.put_threads.len() + 1;
     for (round, &threads) in std::iter::once(&1usize).chain(&p.put_threads).enumerate() {
         let ops = if round == 0 { p.put_ops } else { p.put_mt_ops };
         let mut s = run_phase(
@@ -747,30 +1063,78 @@ fn run_system(p: &Params, name: &str, report: &mut Report) -> R<()> {
         s.phase = if round == 0 { "put".into() } else { "put-mt".into() };
         report.add(name, s);
     }
+    // the same single-message commits, `depth` in flight on one connection
+    if p.pipeline > 0 && target.pipelines() {
+        let depth = p.pipeline;
+        let batches = p.put_ops.div_ceil(depth);
+        let mut s = run_phase(
+            target.as_ref(),
+            1,
+            batches,
+            |t, k| (0..depth).map(|j| msg(p.seed, fresh(rounds as u64, t, k * depth + j), p.value_size)).collect::<Vec<Msg>>(),
+            |ms, sess| sess.put_many(ms),
+            |_, ()| Ok(()),
+        )?;
+        s.ops *= depth;
+        s.phase = format!("put-pipe{depth}");
+        report.add(name, s);
+    }
+
+    read_phases(p, name, target.as_ref(), report, true)?;
+    target.close()?;
+    Ok(())
+}
+
+/// Point reads (`get`, `get-mt`, `get-pipeN`) and newest-50 scans (`latest`,
+/// `latest-mt`). `verify`: every 64th value is compared with the expected
+/// payload (the floor answers every read with the same bytes).
+fn read_phases(p: &Params, name: &str, target: &dyn Target, report: &mut Report, verify: bool) -> R<()> {
+    let read_in = |t: usize, k: usize| {
+        let i = SplitMix64::new(p.seed ^ ((t as u64) << 32) ^ k as u64).next_u64() % p.records;
+        ReadIn { i, channel: datasets::channel_of(i, p.seed), id: datasets::s3_snowflake(p.seed, i), k }
+    };
+    let check_read = |r: &ReadIn, got: Option<&[u8]>| -> R<()> {
+        if verify && r.k.is_multiple_of(VERIFY_EVERY) {
+            check(&msg(p.seed, r.i, p.value_size).payload, got, "get")
+        } else if got.is_none() {
+            Err(format!("get: message {} missing", r.i).into())
+        } else {
+            Ok(())
+        }
+    };
 
     // point reads, uniform over the loaded messages
     for &threads in &p.read_threads {
         let per = if threads == 1 { p.read_ops } else { (p.read_ops / 2).max(1000) };
+        let mut s = run_phase(target, threads, per, read_in, |r, sess| sess.get(r.channel, r.id), |r, got| {
+            check_read(r, got.as_deref())
+        })?;
+        s.phase = if threads == 1 { "get".into() } else { "get-mt".into() };
+        report.add(name, s);
+    }
+    // the same reads, `depth` in flight on one connection
+    if p.pipeline > 0 && target.pipelines() {
+        let depth = p.pipeline;
+        let batches = p.read_ops.div_ceil(depth);
         let mut s = run_phase(
-            target.as_ref(),
-            threads,
-            per,
+            target,
+            1,
+            batches,
             |t, k| {
-                let i = SplitMix64::new(p.seed ^ ((t as u64) << 32) ^ k as u64).next_u64() % p.records;
-                ReadIn { i, channel: datasets::channel_of(i, p.seed), id: datasets::s3_snowflake(p.seed, i), k }
+                let reads: Vec<ReadIn> = (0..depth).map(|j| read_in(t, k * depth + j)).collect();
+                let keys: Vec<(u64, u64)> = reads.iter().map(|r| (r.channel, r.id)).collect();
+                (reads, keys)
             },
-            |r, sess| sess.get(r.channel, r.id),
-            |r, got| {
-                if r.k % VERIFY_EVERY == 0 {
-                    check(&msg(p.seed, r.i, p.value_size).payload, got.as_deref(), "get")
-                } else if got.is_none() {
-                    Err(format!("get: message {} missing", r.i).into())
-                } else {
-                    Ok(())
+            |(_, keys), sess| sess.get_many(keys),
+            |(reads, _), got| {
+                if got.len() != reads.len() {
+                    return Err(format!("get-pipe: {} replies for {} reads", got.len(), reads.len()).into());
                 }
+                reads.iter().zip(&got).try_for_each(|(r, g)| check_read(r, g.as_deref()))
             },
         )?;
-        s.phase = if threads == 1 { "get".into() } else { "get-mt".into() };
+        s.ops *= depth;
+        s.phase = format!("get-pipe{depth}");
         report.add(name, s);
     }
 
@@ -778,7 +1142,7 @@ fn run_system(p: &Params, name: &str, report: &mut Report) -> R<()> {
     for &threads in &p.read_threads {
         let per = if threads == 1 { p.read_ops / 4 } else { (p.read_ops / 8).max(500) };
         let mut s = run_phase(
-            target.as_ref(),
+            target,
             threads,
             per,
             |t, k| {
@@ -799,8 +1163,6 @@ fn run_system(p: &Params, name: &str, report: &mut Report) -> R<()> {
         s.phase = if threads == 1 { "latest".into() } else { "latest-mt".into() };
         report.add(name, s);
     }
-
-    target.close()?;
     Ok(())
 }
 
@@ -836,8 +1198,8 @@ fn main() -> R<()> {
             .collect();
         println!("{phase:<10} x{threads:<3} {}", line.join(" | "));
     }
-    for (sys, bytes, _) in &report.space {
-        println!("space      {sys}: {:.2} MB", *bytes as f64 / 1e6);
+    for (sys, phase, bytes, _) in &report.space {
+        println!("{phase:<10} {sys}: {:.2} MB", *bytes as f64 / 1e6);
     }
     Ok(())
 }

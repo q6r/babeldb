@@ -32,19 +32,26 @@
 //! Status: 0 OK; 1 NOT_FOUND (empty payload; GET, RANGE and DELETE of a
 //! missing key); 2 ERROR (payload: UTF-8 message, not length-prefixed).
 //!
-//! Semantics: PUT and PUT_BATCH items are unconditional (last writer wins);
-//! a PUT_BATCH is applied atomically in one durable commit (`Db::write_batch`);
-//! every acknowledged write is durable. RANGE follows `Db::get_range`
-//! (clamped; an offset past the end is an ERROR). A response that would
-//! exceed `MAX_FRAME_LEN` is replaced by an ERROR.
+//! Semantics: PUT and PUT_BATCH items are unconditional (last writer wins).
+//! A PUT_BATCH is validated as a whole (one invalid item rejects it and
+//! nothing is applied) and applied atomically in one commit. The server
+//! group-commits: writes of every connection may share a commit, and a write
+//! is acknowledged only after the commit carrying it; every acknowledged
+//! write is durable, unless the server was started to acknowledge buffered
+//! writes (`cli::server::ServerConfig::commit`, not the `serve` command's
+//! default). RANGE follows `Db::get_range` (clamped; an offset past the end
+//! is an ERROR). A response that would exceed `MAX_FRAME_LEN` is replaced by
+//! an ERROR.
 //!
 //! # Connections
 //!
-//! A connection carries any number of requests, answered in order (clients
-//! may pipeline). A malformed request inside a well-delimited frame gets an
-//! ERROR and the connection stays usable; a frame length of 0 or above
-//! `MAX_FRAME_LEN` gets an ERROR and the connection is closed (the stream can
-//! no longer be delimited); a truncated frame closes the connection.
+//! A connection carries any number of requests, executed and answered in
+//! order (clients may pipeline: a request sees the effects of every earlier
+//! request of its connection, and pipelined writes may share a commit). A
+//! malformed request inside a well-delimited frame gets an ERROR and the
+//! connection stays usable; a frame length of 0 or above `MAX_FRAME_LEN`
+//! gets an ERROR and the connection is closed (the stream can no longer be
+//! delimited); a truncated frame closes the connection.
 
 use std::fmt;
 use std::io::{self, Read};
