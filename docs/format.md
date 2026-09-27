@@ -62,6 +62,10 @@ Contrato exigido de qualquer backend:
 
 Converter um banco entre backends é copiar as 9 tabelas byte a byte.
 
+Opcionalmente, um log de escrita antecipada (WAL, §19) fica na frente do
+backend: o conteúdo lógico das tabelas é o mesmo, mais três entradas de `meta`
+(§4) que só o WAL grava.
+
 ## 3. Tabelas lógicas
 
 | tabela | chave | valor |
@@ -109,12 +113,17 @@ Exemplo: `[1, 0x0102030405060708]` →
 | `active_zstd_dict` | u64 LE (opcional) | param `ZSTD_DICT` usado em novas escritas; ausente = nenhum |
 | `active_template` | u64 LE (opcional) | param `TEMPLATE` usado em novas escritas; ausente = nenhum |
 | `created_by` | UTF-8 | informativo, ex. `babeldb 0.1.0` |
+| `wal_lsn` | u64 LE (opcional) | só com WAL (§19): LSN do último registro do log contido no banco |
+| `wal_id` | 16 bytes (opcional) | só com WAL (§19): `id` do arquivo de log a que o banco pertence |
+| `wal_clean` | u8 (opcional) | só com WAL (§19): 1 = fechado de forma limpa; 0 = sessão aberta (ou queda) |
 
 `mode`, `block_size` e `inline_max` são parâmetros de criação: gravados quando
 o banco é criado, eles prevalecem sobre a configuração passada em aberturas
 posteriores. Todo id presente numa tabela é menor que o contador
 correspondente; toda revisão gravada é menor que `next_revision`. Um contador
-em `u64::MAX` está esgotado. Escritores v1 não gravam outras entradas.
+em `u64::MAX` está esgotado. Escritores v1 não gravam outras entradas; as
+três entradas do WAL são gravadas só pela camada do WAL, que as esconde do
+motor, e leitores sem WAL as ignoram.
 
 ## 5. Envelope de objeto
 
@@ -512,6 +521,7 @@ total = seeds / receitas / corpos de codec
       + histórico (manifestos retidos e os objetos que só eles mantêm)
       + fontes (sources) e meta
       + espaço interno do backend (páginas, fragmentação, páginas livres)
+      + arquivo de log do WAL, quando usado (tamanho fixo, §19)
       + código de codecs e geradores atribuível no binário
       + qualquer descrição mantida pelo cliente fora do banco
 ```
@@ -531,3 +541,123 @@ nas bordas; testes de rejeição para cada regra das §§ 5–12; testes de
 propriedade (ida e volta, codificação canônica, nenhum pânico com bytes
 arbitrários ou mutados, ordem das chaves de histórico); um validador
 independente das tabelas (§§ 3, 4, 13, 14); e os bancos congelados da §16.
+
+## 19. Log de escrita antecipada (WAL, opcional)
+
+Aditivo à versão 1 (`FORMAT_VERSION` continua `1`). Um banco aberto com
+`Db::open_wal` (`store::wal::WalStore`) tem, além do arquivo do backend, um
+arquivo de log `<arquivo do banco>.wal` (por padrão no mesmo diretório). Um
+commit durável grava o seu registro de redo no log com **uma** escrita
+*write-through* (Windows `FILE_FLAG_WRITE_THROUGH`; Linux `O_DSYNC`; nos
+demais sistemas, escrita + `fdatasync`) e só depois é publicado no backend com
+`Durability::Deferred`; o backend só é sincronizado (fsync) nos checkpoints.
+
+A garantia depende de `WalConfig::sync`:
+
+| modo | escrita | garantia |
+|---|---|---|
+| `WriteThrough` (padrão) | `FILE_FLAG_WRITE_THROUGH` (Linux: `O_DSYNC`) | a do padrão do PostgreSQL no Windows (`wal_sync_method = open_datasync`, o mesmo mecanismo). No Windows ela é mais fraca que a do fsync do redb: segundo a documentação de `CreateFile`, o sistema só pede ao disco que grave através do cache volátil dele quando `FILE_FLAG_NO_BUFFERING` também é usado, e a documentação do PostgreSQL avisa que `open_datasync` não impede o cache de escrita do disco no Windows. No Linux, `O_DSYNC` esvazia o cache do disco |
+| `WriteThroughUnbuffered` (Windows) | `FILE_FLAG_WRITE_THROUGH` + `FILE_FLAG_NO_BUFFERING`, escritas alinhadas em 4 KiB | o sistema pede write-through do cache do disco (FUA) |
+| `Flush` | escrita + `FlushFileBuffers` (`fdatasync`) | o esvaziamento do cache do disco que o `Immediate` do redb faz (PostgreSQL: `fsync`) |
+
+Em todos os modos, confirmado ⇒ gravado, na medida em que o sistema e o disco
+cumprem o que o modo pede; nenhum teste de queda de energia verificou os
+discos.
+
+### 19.1 Arquivo
+
+Criado com tamanho fixo `segment_bytes` (padrão 16 MiB, múltiplo de 4096),
+inteiramente preenchido com zeros e sincronizado antes do primeiro uso (sob o
+nome temporário `<log>.tmp`, depois renomeado): as escritas nunca mudam o
+tamanho nem a alocação do arquivo. Enquanto o banco está aberto, o arquivo fica
+reservado a ele (Windows: sem compartilhamento de escrita nem de remoção;
+Unix: `flock`). Com `WalConfig::dir`, o nome é
+`<arquivo do banco>.<16 dígitos hexadecimais>.wal`, os dígitos sendo o início do
+BLAKE3 do caminho absoluto do banco, para que bancos com o mesmo nome de
+arquivo nunca dividam um log.
+
+Bloco 0 (cabeçalho; o resto do bloco é zero):
+
+| offset | bytes | campo | regra |
+|---|---|---|---|
+| 0 | 8 | `magic` | ASCII `BABELWAL` |
+| 8 | 4 | `version` | u32 LE; = 1 (outro valor: erro `Unsupported`) |
+| 12 | 4 | `data_start` | u32 LE; = 4096 |
+| 16 | 8 | `capacity` | u64 LE; tamanho do arquivo |
+| 24 | 32 | `salt` | aleatório, gerado na criação |
+| 56 | 16 | `checksum` | 16 primeiros bytes do BLAKE3 dos bytes 0..56 |
+
+Do `salt` derivam, com BLAKE3 `derive_key`: `id` = 16 primeiros bytes de
+`derive_key("babeldb 2026-09 wal file id v1", salt)` e `chave` =
+`derive_key("babeldb 2026-09 wal record checksum v1", salt)`. Um cabeçalho
+inválido é erro; o arquivo nunca é descartado em silêncio.
+
+### 19.2 Registros
+
+A partir do offset 4096, registros encostados uns nos outros:
+
+| offset | bytes | campo |
+|---|---|---|
+| 0 | 4 | `magic`: ASCII `BWR1` |
+| 4 | 4 | `len`: u32 LE, bytes do payload |
+| 8 | 8 | `lsn`: u64 LE |
+| 16 | 16 | 16 primeiros bytes de BLAKE3 com chave (`chave`) sobre os bytes 0..16 seguidos do payload |
+| 32 | `len` | payload |
+
+O payload é a sequência de operações da transação, na ordem em que ela as fez:
+
+| operação | codificação |
+|---|---|
+| put | `01`, índice da tabela (u8, ordem da §3: 0 `meta` … 8 `pending_imports`), `klen` u32 LE, `vlen` u32 LE, chave, valor |
+| remove | `02`, índice da tabela, `klen` u32 LE, chave |
+
+Um registro é uma transação inteira. Entram os puts e os removes que
+removeram algo; as entradas `wal_lsn` e `wal_id` nunca entram. Uma transação
+cujo registro passaria de `max_record_bytes` não é registrada: o commit dela é
+um checkpoint. Como a chave de checksum é secreta, bytes de um valor gravado
+pela API nunca passam por um registro.
+
+**Cadeia.** A partir de 4096 lê-se registro após registro enquanto: restam 32
+bytes no arquivo; o magic confere; `len` cabe no que resta; o checksum confere;
+e o `lsn` é o anterior + 1 (o primeiro pode ter qualquer valor). O primeiro
+registro que falha termina a cadeia; ele e tudo o que vem depois são ignorados
+(cauda rasgada, zeros, restos de ciclos anteriores).
+
+### 19.3 Ciclo, checkpoint e recuperação
+
+- **Ciclo.** Cada ciclo começa no offset 4096 com o LSN `D + 1`, onde `D` é o
+  `wal_lsn` tornado durável pelo checkpoint que abriu o ciclo, e só acrescenta
+  registros. O registro de um commit `Deferred` fica em memória e é escrito
+  junto com o próximo commit `Immediate` (ou antes, passado
+  `max_pending_bytes`).
+- **Checkpoint.** Commit `Immediate` do backend, que grava `wal_lsn`; em
+  seguida o ciclo recomeça em 4096. Ocorre quando o próximo registro (mais os
+  pendentes) não cabe no arquivo, em transações grandes demais, a pedido, em
+  `compact` e no fechamento.
+- **Recuperação**, na abertura: `L` = `wal_lsn` durável do backend (0 se
+  ausente). Se o arquivo existe, percorre-se a cadeia: havendo registros e
+  `wal_id` diferente do `id` do arquivo, erro (log de outro banco); o primeiro
+  registro com `lsn > L` precisa ter `lsn = L + 1` (senão erro: faltam
+  registros); os registros com `lsn > L` são aplicados em ordem. Por fim, numa
+  transação `Immediate`: `wal_lsn := max(L, último lsn da cadeia) + tamanho do
+  arquivo / 32 + 1`, `wal_id := id` e `wal_clean := 0`. O salto põe o ciclo
+  seguinte acima de qualquer registro que possa ter sobrado no arquivo, então
+  nenhum resto (por exemplo, um registro íntegro depois de um rasgado) jamais
+  continua uma cadeia nova. Um arquivo de outro tamanho, ou sem registros e de
+  outro banco (ou de nenhum), é substituído por um novo (sal novo): a
+  transação acima grava então `wal_clean := 1` em vez de `wal_id`, e outra,
+  depois da troca, grava `wal_id := id novo` e `wal_clean := 0`. Se o arquivo
+  não existe: erro quando há `wal_id` e `wal_clean ≠ 1` (houve queda, e
+  commits podem existir só no log perdido), salvo `WalConfig::recreate_missing`;
+  senão ele é criado, com `wal_lsn := L`, `wal_id := id`, `wal_clean := 0`.
+- **Fechamento limpo.** Um checkpoint que também grava `wal_clean := 1`.
+- **Invariante.** O estado durável do backend é sempre exatamente o estado
+  após os commits com `lsn ≤ wal_lsn`, e todo commit confirmado com `lsn`
+  maior está na cadeia, contíguo a partir de `wal_lsn + 1`. Reaplicar um
+  registro sobre um estado que já o contém não muda nada (puts e removes são
+  escritas cegas).
+
+Depois de uma queda, o banco deve ser reaberto com o WAL: o arquivo do backend
+sozinho reflete só o último checkpoint. Depois de um fechamento limpo (que faz
+checkpoint) o arquivo do backend sozinho é completo. São permanentes os magics
+`BABELWAL` e `BWR1`, os códigos de operação e os contextos de derivação acima.
