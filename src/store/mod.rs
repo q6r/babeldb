@@ -15,6 +15,8 @@ pub mod mem;
 pub mod redb;
 #[cfg(feature = "lmdb")]
 pub mod heed;
+#[cfg(feature = "fjall")]
+pub mod fjall;
 
 /// Logical tables (identical contract on every backend).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
