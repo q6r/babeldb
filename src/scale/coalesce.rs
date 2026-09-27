@@ -490,9 +490,12 @@ impl Page {
         }
     }
 
+    /// `revision` is the revision of the record the delete removed (what
+    /// `Db::write_batch_each` reports for a delete), so a cached entry at that
+    /// revision or older is the deleted one; a newer cached entry wins.
     fn delete(&mut self, id: u64, revision: Revision) -> Change {
         match self.position(id) {
-            Ok(i) if self.msgs[i].revision < revision => {
+            Ok(i) if self.msgs[i].revision <= revision => {
                 let old = Arc::make_mut(&mut self.msgs).remove(i);
                 self.bytes -= entry_bytes(&old);
                 Change::Applied
