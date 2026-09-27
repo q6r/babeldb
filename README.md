@@ -125,22 +125,23 @@ db.put(b"usuario/42", b"outro", Expect::Revision(rev))?; // concorrência otimis
 
 ## Status das etapas
 
-Etapas da especificação de projeto (§10). **Em implementação**: esta tabela
-será atualizada com os resultados verificados.
+Etapas da especificação de projeto (§10), verificadas em 27/09/2026 pela suíte
+`cargo test --features lmdb,fjall` e pelos benchmarks de `docs/benchmarks.md`.
 
 | # | entrega | status |
 |---|---|---|
-| 0 | cenários sintéticos documentados (S1–S6) | em implementação |
-| 1 | formato, `RawV1`, store redb, put/get/delete | em implementação |
-| 2 | `BabelAffineV1` O(n) + oráculo `num-bigint` | em implementação |
-| 3 | benchmark Raw × BabelPure | em implementação |
-| 4 | Repeat, ArithmeticU64, LZ4, Zstd, seletor | em implementação |
-| 5 | deduplicação + refcounts | em implementação |
-| 6 | intervalos, block size, cache limitado, `put_generated` | em implementação |
-| 7 | dicionários/templates, manutenção | em implementação |
-| 8 | backend LMDB (heed) | em implementação |
-| 9 | recuperação, dados maiores que a RAM, compatibilidade de formato | em implementação |
-| 10 | CLI/REPL/bindings | em implementação |
+| 0 | cenários sintéticos documentados (S1–S6) | feito (`benchdata/manifest.json`) |
+| 1 | formato, `RawV1`, store redb, put/get/delete | feito |
+| 2 | `BabelAffineV1` O(n) + oráculo `num-bigint` | feito (exaustivo em 1–2 bytes + proptest até 4 KiB) |
+| 3 | benchmark Raw × BabelPure | feito — BabelPure ocupa o mesmo que Raw (medido) |
+| 4 | Repeat, ArithmeticU64, LZ4, Zstd, seletor | feito |
+| 5 | deduplicação + refcounts | feito (colisão forçada testada) |
+| 6 | intervalos, block size, cache limitado, `put_generated` | feito |
+| 7 | dicionários/templates, manutenção | feito (`verify`, `gc`, `compact`, treino com validação) |
+| 8 | backends LMDB (heed) e fjall (LSM) | feito; passam na suíte de conformidade |
+| 9 | recuperação, dados maiores que a RAM, compatibilidade de formato | recuperação (processo morto) e fixtures v1 feitos; benchmark > RAM disponível no harness, ainda não executado |
+| 10 | CLI/REPL/servidor TCP | feito |
+| + | escala tipo Discord: group commit, sharding, coalescing, chat | feito; comparação com PostgreSQL/MongoDB em `docs/comparison.md` |
 
 ## Documentação
 
@@ -149,5 +150,7 @@ será atualizada com os resultados verificados.
   de contabilidade de espaço).
 - [`docs/benchmarks.md`](docs/benchmarks.md) — metodologia e resultados dos
   benchmarks.
+- [`docs/comparison.md`](docs/comparison.md) — babeldb × PostgreSQL × MongoDB locais
+  (mesmos dados e operações, durabilidade equivalente) e o plano de otimização.
 - Especificação de projeto (Babel puro × adaptativo):
   `C:\Users\v4mpt\.traycer\epics\b35e3479-77fe-4fea-bba0-164773e26a94\artifacts\babeldb-design\index.md`.
