@@ -35,6 +35,10 @@ harness = false
 name = "engine"
 harness = false
 
+[[bench]]
+name = "scale"
+harness = false
+
 [profile.release]
 debug = "line-tables-only"
 
