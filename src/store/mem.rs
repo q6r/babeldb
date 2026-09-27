@@ -49,8 +49,11 @@ fn scan_map(
     reverse: bool,
     f: &mut ScanFn<'_>,
 ) -> Result<()> {
+    // BTreeMap::range panics on start > end and on start == end with both
+    // bounds excluded; both describe empty ranges.
     if let (Bound::Included(s) | Bound::Excluded(s), Bound::Included(e) | Bound::Excluded(e)) = (start, end) {
-        if s > e {
+        let both_excluded = matches!((start, end), (Bound::Excluded(_), Bound::Excluded(_)));
+        if s > e || (s == e && both_excluded) {
             return Ok(());
         }
     }
