@@ -4,21 +4,27 @@
 //! -> decode -> verify (len + BLAKE3) -> bytes. The hash index is only used
 //! on writes (dedupe candidates), never to find the current version.
 //!
-//! SKELETON — public signatures are the contract used by the CLI, benches and
-//! tests. The engine agent implements the bodies (and may add private fields,
-//! private modules and extra public methods, but must keep these signatures).
+//! The public signatures are the contract used by the CLI, benches and tests.
+//! Maintenance/training methods live in `crate::maintenance`, imports in
+//! `crate::ingest` (both as `impl Db` blocks using `ops`).
+
+pub mod ops;
 
 use std::ops::Bound;
 use std::path::Path;
+use std::sync::{Arc, RwLock};
 
-use crate::config::{Config, Mode};
-use crate::error::Result;
-use crate::format::SourceDescriptor;
-use crate::maintenance::{CompactReport, GcReport, VerifyReport};
-use crate::planner::{TrainOptions, TrainReport};
-use crate::stats::Stats;
+use crate::cache::BlockCache;
+use crate::config::{Config, Mode, MAX_BLOCK_SIZE, MIN_BLOCK_SIZE};
+use crate::error::{Error, Result};
+use crate::format::{self, meta_key, SourceDescriptor, FORMAT_VERSION};
+use crate::generator::{Generator, Registry};
+use crate::planner::Planner;
+use crate::stats::{EngineCounters, Stats};
 use crate::store::redb::RedbStore;
-use crate::store::Store;
+use crate::store::{Durability, Store, Table, WriteTxn};
+
+use ops::{ParamCache, ParamEntry};
 
 pub type Revision = u64;
 
@@ -139,8 +145,18 @@ pub struct Inspection {
 }
 
 pub struct Db<S: Store = RedbStore> {
-    store: S,
-    cfg: Config,
+    pub(crate) store: S,
+    pub(crate) cfg: Config,
+    /// Persisted creation parameters (win over `cfg`).
+    pub(crate) mode: Mode,
+    pub(crate) block_size: u32,
+    pub(crate) inline_max: u32,
+    /// Replaced (not mutated) when a dictionary/template is installed.
+    pub(crate) planner: RwLock<Arc<Planner>>,
+    pub(crate) params: ParamCache,
+    pub(crate) cache: BlockCache,
+    pub(crate) generators: Registry,
+    pub(crate) counters: EngineCounters,
 }
 
 impl Db<RedbStore> {
@@ -151,13 +167,92 @@ impl Db<RedbStore> {
     }
 }
 
-#[allow(unused_variables)]
+fn meta_u32<T: crate::store::ReadTxn + ?Sized>(t: &T, name: &str) -> Result<u32> {
+    let v = ops::get_meta(t, name)?.ok_or_else(|| Error::format(format!("missing meta {name}")))?;
+    format::decode_u32(&v)
+}
+
 impl<S: Store> Db<S> {
     /// Initialize `meta` on first use (format version, mode, block size,
     /// inline_max, id counters) or validate it (unknown format version => error).
     pub fn with_store(store: S, cfg: Config) -> Result<Db<S>> {
         cfg.validate()?;
-        Ok(Db { store, cfg })
+        let (mode, block_size, inline_max) = {
+            let mut w = store.begin_write()?;
+            match ops::get_meta(&w, meta_key::FORMAT_VERSION)? {
+                None => {
+                    w.put(Table::Meta, meta_key::FORMAT_VERSION.as_bytes(), &FORMAT_VERSION.to_le_bytes())?;
+                    w.put(Table::Meta, meta_key::MODE.as_bytes(), &[cfg.mode as u8])?;
+                    w.put(Table::Meta, meta_key::BLOCK_SIZE.as_bytes(), &cfg.block_size.to_le_bytes())?;
+                    w.put(Table::Meta, meta_key::INLINE_MAX.as_bytes(), &cfg.inline_max.to_le_bytes())?;
+                    for counter in [
+                        meta_key::NEXT_OBJECT_ID,
+                        meta_key::NEXT_REVISION,
+                        meta_key::NEXT_PARAM_ID,
+                        meta_key::NEXT_SOURCE_ID,
+                        meta_key::NEXT_IMPORT_ID,
+                    ] {
+                        ops::put_meta_u64(&mut w, counter, 1)?;
+                    }
+                    let created_by = format!("babeldb {}", env!("CARGO_PKG_VERSION"));
+                    w.put(Table::Meta, meta_key::CREATED_BY.as_bytes(), created_by.as_bytes())?;
+                    w.commit(Durability::Immediate)?;
+                    (cfg.mode, cfg.block_size, cfg.inline_max)
+                }
+                Some(v) => {
+                    let version = format::decode_u32(&v)?;
+                    if version != FORMAT_VERSION {
+                        return Err(Error::Unsupported(format!(
+                            "format version {version} (this build reads {FORMAT_VERSION})"
+                        )));
+                    }
+                    let mode = ops::get_meta(&w, meta_key::MODE)?
+                        .and_then(|b| if b.len() == 1 { Mode::from_u8(b[0]) } else { None })
+                        .ok_or_else(|| Error::format("bad mode in meta"))?;
+                    let bs = meta_u32(&w, meta_key::BLOCK_SIZE)?;
+                    let im = meta_u32(&w, meta_key::INLINE_MAX)?;
+                    if !(MIN_BLOCK_SIZE..=MAX_BLOCK_SIZE).contains(&bs) || im > bs {
+                        return Err(Error::format("invalid persisted block_size/inline_max"));
+                    }
+                    drop(w);
+                    (mode, bs, im)
+                }
+            }
+        };
+
+        let params = ParamCache::new(cfg.codecs.zstd_level);
+        let (dict, template) = {
+            let r = store.begin_read()?;
+            let dict = match ops::get_meta_u64(&r, meta_key::ACTIVE_ZSTD_DICT)? {
+                Some(id) => match params.load(&r, id)? {
+                    ParamEntry::Dict(d) => Some(d),
+                    ParamEntry::Template(_) => return Err(Error::format("active dictionary is not a dictionary")),
+                },
+                None => None,
+            };
+            let template = match ops::get_meta_u64(&r, meta_key::ACTIVE_TEMPLATE)? {
+                Some(id) => match params.load(&r, id)? {
+                    ParamEntry::Template(t) => Some(t),
+                    ParamEntry::Dict(_) => return Err(Error::format("active template is not a template")),
+                },
+                None => None,
+            };
+            (dict, template)
+        };
+        let planner = Planner::new(mode, cfg.codecs.clone()).with_params(dict, template);
+
+        Ok(Db {
+            cache: BlockCache::new(cfg.cache_bytes),
+            generators: Registry::builtin(),
+            counters: EngineCounters::default(),
+            planner: RwLock::new(Arc::new(planner)),
+            params,
+            mode,
+            block_size,
+            inline_max,
+            store,
+            cfg,
+        })
     }
 
     pub fn config(&self) -> &Config {
@@ -166,23 +261,52 @@ impl<S: Store> Db<S> {
 
     /// Effective (persisted) mode.
     pub fn mode(&self) -> Mode {
-        todo!()
+        self.mode
     }
 
     /// Effective (persisted) block size.
     pub fn block_size(&self) -> u32 {
-        todo!()
+        self.block_size
     }
 
     /// Effective (persisted) inline threshold.
     pub fn inline_max(&self) -> u32 {
-        todo!()
+        self.inline_max
     }
 
     pub fn store(&self) -> &S {
         &self.store
     }
 
+    /// Current planner (cheap `Arc` clone).
+    pub(crate) fn planner(&self) -> Arc<Planner> {
+        self.planner.read().map(|p| p.clone()).unwrap_or_else(|e| e.into_inner().clone())
+    }
+
+    pub(crate) fn replace_planner(&self, p: Planner) {
+        match self.planner.write() {
+            Ok(mut g) => *g = Arc::new(p),
+            Err(e) => *e.into_inner() = Arc::new(p),
+        }
+    }
+
+    /// Dedupe is only active in Adaptive mode.
+    pub(crate) fn dedupe(&self) -> bool {
+        self.cfg.effective_dedupe(self.mode)
+    }
+
+    /// Register an extra generator (tests, experiments).
+    pub fn register_generator(&mut self, g: Box<dyn Generator>) {
+        self.generators.register(g);
+    }
+
+    pub fn clear_cache(&self) {
+        self.cache.clear();
+    }
+}
+
+#[allow(unused_variables)]
+impl<S: Store> Db<S> {
     /// Durable when it returns (Immediate commit).
     pub fn put(&self, key: &[u8], value: &[u8], expect: Expect) -> Result<Revision> {
         todo!()
@@ -253,43 +377,12 @@ impl<S: Store> Db<S> {
         todo!()
     }
 
-    /// Train a Zstd dictionary from samples, evaluate it on held-out samples and
-    /// install it as the active dictionary only if the projected net gain is positive.
-    pub fn train_dictionary(&self, samples: &[Vec<u8>], opts: &TrainOptions) -> Result<TrainReport> {
-        todo!()
-    }
-
-    /// Same for a `TemplatePatchV1` template.
-    pub fn train_template(&self, samples: &[Vec<u8>], opts: &TrainOptions) -> Result<TrainReport> {
-        todo!()
-    }
-
     pub fn inspect(&self, key: &[u8]) -> Result<Option<Inspection>> {
         todo!()
     }
 
     /// Full accounting (scans every table).
     pub fn stats(&self) -> Result<Stats> {
-        todo!()
-    }
-
-    pub fn clear_cache(&self) {
-        todo!()
-    }
-
-    /// Consistency check. `deep` also decodes every object and checks digests.
-    pub fn verify(&self, deep: bool) -> Result<VerifyReport> {
-        todo!()
-    }
-
-    /// Exclusive maintenance: abandoned imports, orphan objects/candidates/params,
-    /// refcount drift.
-    pub fn gc(&mut self) -> Result<GcReport> {
-        todo!()
-    }
-
-    /// Exclusive: ask the backend to return free space to the file system.
-    pub fn compact(&mut self) -> Result<CompactReport> {
         todo!()
     }
 }

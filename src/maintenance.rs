@@ -1,4 +1,10 @@
-//! Maintenance reports (the procedures are `Db::verify`, `Db::gc`, `Db::compact`).
+//! Maintenance and training: `Db::verify`, `Db::gc`, `Db::compact`,
+//! `Db::train_dictionary`, `Db::train_template`.
+
+use crate::engine::Db;
+use crate::error::Result;
+use crate::planner::{TrainOptions, TrainReport};
+use crate::store::Store;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct VerifyReport {
@@ -46,4 +52,34 @@ pub struct CompactReport {
     pub apparent_after: u64,
     pub allocated_before: Option<u64>,
     pub allocated_after: Option<u64>,
+}
+
+#[allow(unused_variables)]
+impl<S: Store> Db<S> {
+    /// Consistency check. `deep` also decodes every object and checks digests.
+    pub fn verify(&self, deep: bool) -> Result<VerifyReport> {
+        todo!()
+    }
+
+    /// Exclusive maintenance: abandoned imports, orphan objects/candidates/params,
+    /// refcount drift.
+    pub fn gc(&mut self) -> Result<GcReport> {
+        todo!()
+    }
+
+    /// Exclusive: ask the backend to return free space to the file system.
+    pub fn compact(&mut self) -> Result<CompactReport> {
+        todo!()
+    }
+
+    /// Train a Zstd dictionary from samples, evaluate it on held-out samples and
+    /// install it as the active dictionary only if the projected net gain is positive.
+    pub fn train_dictionary(&self, samples: &[Vec<u8>], opts: &TrainOptions) -> Result<TrainReport> {
+        todo!()
+    }
+
+    /// Same for a `TemplatePatchV1` template.
+    pub fn train_template(&self, samples: &[Vec<u8>], opts: &TrainOptions) -> Result<TrainReport> {
+        todo!()
+    }
 }
