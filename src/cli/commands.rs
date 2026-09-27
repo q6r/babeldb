@@ -1742,6 +1742,8 @@ pub fn render_stats(out: &mut dyn Write, s: &Stats) -> io::Result<()> {
     )?;
     sub(out, "history", fmt_bytes(s.history_bytes))?;
     sub(out, "sources", fmt_bytes(s.source_bytes))?;
+    sub(out, "meta", fmt_bytes(s.meta_bytes))?;
+    sub(out, "pending imports", fmt_bytes(s.pending_import_bytes))?;
     sub(out, "total payload", fmt_bytes(s.payload_bytes()))?;
     writeln!(out, "per codec (units = objects + inline envelopes)")?;
     if s.per_codec.is_empty() {

@@ -1140,7 +1140,7 @@ fn sample_stats() -> Stats {
         param_bytes: 0,
         history_bytes: 132,
         source_bytes: 60,
-        meta_bytes: 180,
+        meta_bytes: 0,
         pending_import_bytes: 0,
         per_codec: vec![CodecUsage {
             codec: "RawV1".into(),
@@ -1191,6 +1191,8 @@ fn stats_report_is_complete() {
         "hit ratio 0.7500".to_string(),
         "RawV1".to_string(),
         "hash candidates".to_string(),
+        report_sub("meta", "0 B"),
+        report_sub("pending imports", "0 B"),
         "engine counters (this process)".to_string(),
     ] {
         assert!(text.contains(&needle), "missing '{needle}' in:\n{text}");
