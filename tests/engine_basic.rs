@@ -1110,6 +1110,7 @@ fn chat_value(channel: u32, seq: u64) -> Vec<u8> {
 }
 
 fn chat_workload<S: Store>(db: &Db<S>, channels: u32, per_channel: u64) {
+    let records_before = db.stats().unwrap().records;
     let mut seq = 0u64;
     for round in 0..per_channel / 10 {
         let mut msgs = Vec::new();
@@ -1126,7 +1127,7 @@ fn chat_workload<S: Store>(db: &Db<S>, channels: u32, per_channel: u64) {
         }
     }
     db.sync().unwrap();
-    assert_eq!(db.stats().unwrap().records, seq);
+    assert_eq!(db.stats().unwrap().records, records_before + seq);
     for channel in 0..channels {
         let prefix = format!("ch/{channel:04}/");
         let latest = db.scan(&ScanOptions::prefix(prefix.as_bytes()).reverse(true).limit(50).with_values(true)).unwrap();
