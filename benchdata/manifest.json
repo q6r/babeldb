@@ -1,0 +1,550 @@
+{
+  "schema": "babeldb-benchdata-manifest/1",
+  "datasets_version": 1,
+  "generator": "src/datasets.rs; regenerate with: cargo bench --bench engine -- gen-manifest",
+  "note": "Synthetic scenarios are explicit hypotheses standing in for a production corpus, which is not available (spec section 11). Results on them do not predict results on real data.",
+  "determinism": "Every record is a pure function of (scenario, seed, i, value_size) using integer arithmetic, splitmix64 and BLAKE3; S6 also depends on libzstd level-3 output. The first n records of a larger dataset are the n-record dataset.",
+  "zstd_library": "1.5.7",
+  "digest": "BLAKE3 over, for i in 0..records: u64 LE key length, key, u64 LE value length, value",
+  "default_seed": 42,
+  "scenarios": [
+    {
+      "id": "s1",
+      "name": "s1-repetitive",
+      "key_format": "s1-repetitive/{i:012}",
+      "description": "Even i: value_size zero bytes. Odd i: a random motif of 2..=64 bytes repeated up to value_size (the last repetition is truncated).",
+      "hypothesis": "Runs and exact repetitions (padding, fills, sparse blobs) are represented by RepeatV1 or a compressor at a tiny fraction of their size; BabelPure stays at Raw size by construction.",
+      "parameters": {
+        "zero_records": "even i",
+        "motif_bytes": "2..=64 (odd i)"
+      }
+    },
+    {
+      "id": "s2",
+      "name": "s2-sequences",
+      "key_format": "s2-sequences/{i:012}",
+      "description": "Consecutive little-endian u64 terms of an arithmetic progression with a per-record start < 2^48 and step in 1..=65536; a trailing partial term (value_size not a multiple of 8) is the little-endian prefix of the next term.",
+      "hypothesis": "Counters, offset tables and timestamps are recognized exactly by ArithmeticU64V1 (constant-size body) when the unit length is a multiple of 8.",
+      "parameters": {
+        "start": "< 2^48",
+        "step": "1..=65536",
+        "element": "u64 little-endian"
+      }
+    },
+    {
+      "id": "s3",
+      "name": "s3-chat-json",
+      "key_format": "ch/{channel:08}/msg/{snowflake:020}",
+      "description": "Discord-like message JSON {id, channel_id, author {id, username}, content, timestamp, mentions [], pinned false}. id is a snowflake (Discord epoch, 42-bit ms timestamp << 22 | worker << 17 | process << 12 | increment); messages are sent 100 ms apart on average, so snowflakes increase with i. channel: 1000 channels, Zipf (exponent 1) over channel popularity. author: 10000 users, skewed. content: words of a fixed 256-word list, padded so that the value is exactly value_size bytes whenever value_size is at least the fixed template (about 200 bytes).",
+      "hypothesis": "Chat-scale workload: many small records sharing a fixed JSON template and a small vocabulary; a reverse prefix scan of a channel returns its latest messages.",
+      "parameters": {
+        "channels": 1000,
+        "users": 10000,
+        "discord_epoch_unix_ms": 1420070400000,
+        "first_message_unix_ms": 1735689600000,
+        "mean_gap_ms": 100,
+        "channel_popularity": "Zipf exponent 1, integer weights 2^32/(rank+1), rank -> channel (rank*337+211) mod 1000",
+        "vocabulary_words": 256,
+        "template_bytes_record0": 213,
+        "latest_query": "ScanOptions::prefix(channel_prefix(c)).reverse(true).limit(50).with_values(true)"
+      }
+    },
+    {
+      "id": "s4",
+      "name": "s4-duplicates",
+      "key_format": "s4-duplicates/{i:012}",
+      "description": "Exactly 3 of every 10 consecutive records (never record 0) are exact copies of the value of an earlier record chosen uniformly in [0, i); every other value is BLAKE3-XOF output (incompressible).",
+      "hypothesis": "Byte-verified dedupe removes exact duplicates. Only values stored as objects (length > inline_max) can be deduplicated, and compression cannot help because the base values are high entropy.",
+      "parameters": {
+        "duplicates_per_10_records": 3,
+        "source": "uniform in [0, i)",
+        "base_values": "BLAKE3 XOF"
+      }
+    },
+    {
+      "id": "s5",
+      "name": "s5-high-entropy",
+      "key_format": "s5-high-entropy/{i:012}",
+      "description": "BLAKE3 XOF output derived from (seed, i); the planner does not know the seed.",
+      "hypothesis": "Incompressible data: every Adaptive candidate falls back to Raw and the envelope/manifest overhead is pure cost.",
+      "parameters": {
+        "generator": "BLAKE3 derive_key XOF over (seed, i)"
+      }
+    },
+    {
+      "id": "s6",
+      "name": "s6-compressed",
+      "key_format": "s6-compressed/{i:012}",
+      "description": "One zstd level-3 frame per record of S3-like JSON-lines chat text; the text length is searched (secant method, at most 8 compressions, stopping within 2 %) and the frame closest to value_size is kept, so sizes vary a few percent around value_size (see min/max_value_len in the manifest).",
+      "hypothesis": "Already-compressed payloads (attachments, .zst files): recompression gains nothing and costs CPU; the planner must fall back to Raw.",
+      "parameters": {
+        "zstd_level": 3,
+        "size_search": "closest frame to value_size in at most 8 compressions, stop within 2 %",
+        "text": "JSON lines of S3-like messages of one channel"
+      }
+    }
+  ],
+  "variants": [
+    {
+      "name": "raw-backend",
+      "description": "keys/values written directly to Table::Records through the Store trait, no engine format (backend reference)"
+    },
+    {
+      "name": "engine-raw",
+      "description": "engine with RawV1 only, no dedupe (Config::raw_only): format overhead baseline"
+    },
+    {
+      "name": "babel-pure",
+      "description": "Mode::BabelPure: every unit stored as its BabelAffineV1 seed (no dedupe)"
+    },
+    {
+      "name": "lz4",
+      "description": "Adaptive restricted to Lz4V1 + RawV1, no dedupe"
+    },
+    {
+      "name": "zstd",
+      "description": "Adaptive restricted to ZstdV1 (no dictionary) + RawV1, no dedupe"
+    },
+    {
+      "name": "adaptive-nodedupe",
+      "description": "Adaptive with the default codec policy, dedupe off"
+    },
+    {
+      "name": "adaptive",
+      "description": "Adaptive with the default codec policy and byte-verified dedupe"
+    }
+  ],
+  "benchmark_defaults": {
+    "records": 20000,
+    "value_size": 1024,
+    "block_size": 16384,
+    "inline_max": 1024,
+    "cache_bytes": 67108864,
+    "backend_cache_bytes": 67108864,
+    "batch": 1000,
+    "durable_puts": 200,
+    "ops": 10000,
+    "dist": "uniform",
+    "zipf_theta": 0.99,
+    "readers": "logical CPUs",
+    "range_len": 100,
+    "latest_limit": 50,
+    "verify_every": 64
+  },
+  "digests": [
+    {
+      "scenario": "s1-repetitive",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 64,
+      "blake3": "8a9aa5042885957fd30e1ba3e90e287d8fa7858758d5acc7af2d42644e8ba9de",
+      "key_bytes": 260000,
+      "value_bytes": 640000,
+      "min_value_len": 64,
+      "max_value_len": 64
+    },
+    {
+      "scenario": "s1-repetitive",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 256,
+      "blake3": "d67d827b7285bbeffdcbad0585298dc2b302f9eddce7cac60de8bef8e9d0b06e",
+      "key_bytes": 260000,
+      "value_bytes": 2560000,
+      "min_value_len": 256,
+      "max_value_len": 256
+    },
+    {
+      "scenario": "s1-repetitive",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 1024,
+      "blake3": "14d464352448ad0eef15c28e15c2009337dc444188ffcd2c55fe0d5af5cf3070",
+      "key_bytes": 260000,
+      "value_bytes": 10240000,
+      "min_value_len": 1024,
+      "max_value_len": 1024
+    },
+    {
+      "scenario": "s1-repetitive",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 4096,
+      "blake3": "7a162d3aa62dc353d24e529ae96fc0cb83e11483df16e994b2699d13ef8928a7",
+      "key_bytes": 260000,
+      "value_bytes": 40960000,
+      "min_value_len": 4096,
+      "max_value_len": 4096
+    },
+    {
+      "scenario": "s1-repetitive",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 16384,
+      "blake3": "abb2087331bde7db0afb44a2ba801193daa1b573d0dcfc7c1e27666d3cef1c97",
+      "key_bytes": 260000,
+      "value_bytes": 163840000,
+      "min_value_len": 16384,
+      "max_value_len": 16384
+    },
+    {
+      "scenario": "s1-repetitive",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 65536,
+      "blake3": "8c49ce0777b040c992676c041834624bee9f7617a7a2ea08a9be85b19205b193",
+      "key_bytes": 260000,
+      "value_bytes": 655360000,
+      "min_value_len": 65536,
+      "max_value_len": 65536
+    },
+    {
+      "scenario": "s2-sequences",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 64,
+      "blake3": "6b38e7f5f1fabec9de4da123454cfa151a84fd2f983d3da0f66068d407674944",
+      "key_bytes": 250000,
+      "value_bytes": 640000,
+      "min_value_len": 64,
+      "max_value_len": 64
+    },
+    {
+      "scenario": "s2-sequences",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 256,
+      "blake3": "99bfea010244b528aa366f8c2363ad3560580937f948113770f170344b096aa0",
+      "key_bytes": 250000,
+      "value_bytes": 2560000,
+      "min_value_len": 256,
+      "max_value_len": 256
+    },
+    {
+      "scenario": "s2-sequences",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 1024,
+      "blake3": "138fdb084cd0866eb7e7a17c07b9c0e8466cbc061a1fbec8b84801ba6f206fc3",
+      "key_bytes": 250000,
+      "value_bytes": 10240000,
+      "min_value_len": 1024,
+      "max_value_len": 1024
+    },
+    {
+      "scenario": "s2-sequences",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 4096,
+      "blake3": "fc1ebd5c5645538f6eb5c49e17e525f819a21cd591438e986146f258a71bcad0",
+      "key_bytes": 250000,
+      "value_bytes": 40960000,
+      "min_value_len": 4096,
+      "max_value_len": 4096
+    },
+    {
+      "scenario": "s2-sequences",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 16384,
+      "blake3": "69539d4b8931bf83686df0068f8f256b09c2b81f0fb8cf5f54424ffc2b045fa9",
+      "key_bytes": 250000,
+      "value_bytes": 163840000,
+      "min_value_len": 16384,
+      "max_value_len": 16384
+    },
+    {
+      "scenario": "s2-sequences",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 65536,
+      "blake3": "5a435b7fed08a7bfc7b29b16db020b7bb710852497711f226da9a49dab37363a",
+      "key_bytes": 250000,
+      "value_bytes": 655360000,
+      "min_value_len": 65536,
+      "max_value_len": 65536
+    },
+    {
+      "scenario": "s3-chat-json",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 64,
+      "blake3": "cebe33586a828ec2ac3ebf394d37898c06673b59e68b0c389545d2c37b980433",
+      "key_bytes": 360000,
+      "value_bytes": 2131691,
+      "min_value_len": 207,
+      "max_value_len": 221,
+      "channels_used": 907,
+      "top_channel_records": 1335
+    },
+    {
+      "scenario": "s3-chat-json",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 256,
+      "blake3": "06faf5f45217454494c63de22e109eef9a0d3195a23c8000b0d8de59415b88ab",
+      "key_bytes": 360000,
+      "value_bytes": 2560000,
+      "min_value_len": 256,
+      "max_value_len": 256,
+      "channels_used": 907,
+      "top_channel_records": 1335
+    },
+    {
+      "scenario": "s3-chat-json",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 1024,
+      "blake3": "06fe9e9b2b4e4d1c7efccd02b8eca76e8d46cc067e797ca6eb4a50b7bcc73199",
+      "key_bytes": 360000,
+      "value_bytes": 10240000,
+      "min_value_len": 1024,
+      "max_value_len": 1024,
+      "channels_used": 907,
+      "top_channel_records": 1335
+    },
+    {
+      "scenario": "s3-chat-json",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 4096,
+      "blake3": "c88da1a2e0f481afc2ab76ce443c79f61dbb6497a7e48ef3ad8078f33eb95fc0",
+      "key_bytes": 360000,
+      "value_bytes": 40960000,
+      "min_value_len": 4096,
+      "max_value_len": 4096,
+      "channels_used": 907,
+      "top_channel_records": 1335
+    },
+    {
+      "scenario": "s3-chat-json",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 16384,
+      "blake3": "fe4a6f9dbe5c92ab4c3df20037ae9683c3b16402fb57826d0e37b01d098ad683",
+      "key_bytes": 360000,
+      "value_bytes": 163840000,
+      "min_value_len": 16384,
+      "max_value_len": 16384,
+      "channels_used": 907,
+      "top_channel_records": 1335
+    },
+    {
+      "scenario": "s3-chat-json",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 65536,
+      "blake3": "6b89a3b6262d2aa95ac51fd40d5f6482cdbce930fc1fda290ea13c7a93038a74",
+      "key_bytes": 360000,
+      "value_bytes": 655360000,
+      "min_value_len": 65536,
+      "max_value_len": 65536,
+      "channels_used": 907,
+      "top_channel_records": 1335
+    },
+    {
+      "scenario": "s4-duplicates",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 64,
+      "blake3": "2ef197b5242ed6f1ffd208a16ca18064d3c90337c87df0ce4ac0cb60c00a9adb",
+      "key_bytes": 260000,
+      "value_bytes": 640000,
+      "min_value_len": 64,
+      "max_value_len": 64,
+      "duplicate_records": 3000
+    },
+    {
+      "scenario": "s4-duplicates",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 256,
+      "blake3": "61423a273c49940471dbe15cb83613053611cfb3c186dfb541e8ec44dc71c63d",
+      "key_bytes": 260000,
+      "value_bytes": 2560000,
+      "min_value_len": 256,
+      "max_value_len": 256,
+      "duplicate_records": 3000
+    },
+    {
+      "scenario": "s4-duplicates",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 1024,
+      "blake3": "bf756561c2672a7ee7c7418c69dd1c1c0e25cbfcb3b5b854f5320ebb1d1545a9",
+      "key_bytes": 260000,
+      "value_bytes": 10240000,
+      "min_value_len": 1024,
+      "max_value_len": 1024,
+      "duplicate_records": 3000
+    },
+    {
+      "scenario": "s4-duplicates",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 4096,
+      "blake3": "31f15d9a4b6fc3806082573cc61264d5cfe70df2bd643cf5729bffba1c266a14",
+      "key_bytes": 260000,
+      "value_bytes": 40960000,
+      "min_value_len": 4096,
+      "max_value_len": 4096,
+      "duplicate_records": 3000
+    },
+    {
+      "scenario": "s4-duplicates",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 16384,
+      "blake3": "81b1a958fb73b35cfbe5581820214678ff3115fe69d212cb05e59d97db11a1e8",
+      "key_bytes": 260000,
+      "value_bytes": 163840000,
+      "min_value_len": 16384,
+      "max_value_len": 16384,
+      "duplicate_records": 3000
+    },
+    {
+      "scenario": "s4-duplicates",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 65536,
+      "blake3": "75fef3e200cf779305b10d44ccbbd79ace42b8fb2adff38b2c01864f33f8ef53",
+      "key_bytes": 260000,
+      "value_bytes": 655360000,
+      "min_value_len": 65536,
+      "max_value_len": 65536,
+      "duplicate_records": 3000
+    },
+    {
+      "scenario": "s5-high-entropy",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 64,
+      "blake3": "4501a7b20fefb54ded7834d0f1eb31af05dea6cf4d4fbb40ea1abfc388c6ed2e",
+      "key_bytes": 280000,
+      "value_bytes": 640000,
+      "min_value_len": 64,
+      "max_value_len": 64
+    },
+    {
+      "scenario": "s5-high-entropy",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 256,
+      "blake3": "3ffd3672bdcac212b7ef2ae7220ba010c9acd4972708a398d4b0f406fea9c931",
+      "key_bytes": 280000,
+      "value_bytes": 2560000,
+      "min_value_len": 256,
+      "max_value_len": 256
+    },
+    {
+      "scenario": "s5-high-entropy",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 1024,
+      "blake3": "b2d10fdf8c5fd2f30ad4b53faeaf12323d4e27eb85a6fc684b14e16e29f500d1",
+      "key_bytes": 280000,
+      "value_bytes": 10240000,
+      "min_value_len": 1024,
+      "max_value_len": 1024
+    },
+    {
+      "scenario": "s5-high-entropy",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 4096,
+      "blake3": "339edfa31301475d2901db18766b113df02099f222467d993e193ae6401abe12",
+      "key_bytes": 280000,
+      "value_bytes": 40960000,
+      "min_value_len": 4096,
+      "max_value_len": 4096
+    },
+    {
+      "scenario": "s5-high-entropy",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 16384,
+      "blake3": "692676da64e697e47e2cc562cb5b6fc727512d229280af781a47d2ab4f7321ab",
+      "key_bytes": 280000,
+      "value_bytes": 163840000,
+      "min_value_len": 16384,
+      "max_value_len": 16384
+    },
+    {
+      "scenario": "s5-high-entropy",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 65536,
+      "blake3": "e6bed3688e6bbfe03640c70bd980281d24116b27357c3da3175bf7b5d993f860",
+      "key_bytes": 280000,
+      "value_bytes": 655360000,
+      "min_value_len": 65536,
+      "max_value_len": 65536
+    },
+    {
+      "scenario": "s6-compressed",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 64,
+      "blake3": "574410f544d7a1aa8c61c71d96d24c62e1320f6c4e7cedcfb9906d7a90c37f7d",
+      "key_bytes": 260000,
+      "value_bytes": 630000,
+      "min_value_len": 63,
+      "max_value_len": 63
+    },
+    {
+      "scenario": "s6-compressed",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 256,
+      "blake3": "0a761a357c161d1c8760f2a6fd120c91bc5da49f1cf470da14483084e24fbd0a",
+      "key_bytes": 260000,
+      "value_bytes": 2567787,
+      "min_value_len": 251,
+      "max_value_len": 262
+    },
+    {
+      "scenario": "s6-compressed",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 1024,
+      "blake3": "8ab678b5d715fe05d03888617bae7f82a8485f1b8f1b751025ac50a02e061298",
+      "key_bytes": 260000,
+      "value_bytes": 10235837,
+      "min_value_len": 971,
+      "max_value_len": 1062
+    },
+    {
+      "scenario": "s6-compressed",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 4096,
+      "blake3": "b1136747a1865767d630060dae72685f3ce58d604ce916f201afb64b0161bdf1",
+      "key_bytes": 260000,
+      "value_bytes": 41108112,
+      "min_value_len": 4016,
+      "max_value_len": 4177
+    },
+    {
+      "scenario": "s6-compressed",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 16384,
+      "blake3": "a35cbcc5208d6dbaf3ccc43077361e83e780cffa11790c41b612c32ea9a3a16f",
+      "key_bytes": 260000,
+      "value_bytes": 164217838,
+      "min_value_len": 16255,
+      "max_value_len": 16711
+    },
+    {
+      "scenario": "s6-compressed",
+      "seed": 42,
+      "records": 10000,
+      "value_size": 65536,
+      "blake3": "1ded6286375b44ad62214976aa098bca09ed693a613f7542bc80075b07bd3a12",
+      "key_bytes": 260000,
+      "value_bytes": 654992280,
+      "min_value_len": 64298,
+      "max_value_len": 66811
+    }
+  ]
+}
