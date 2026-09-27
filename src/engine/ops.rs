@@ -100,6 +100,20 @@ impl ParamCache {
 /// `params` (see `ParamCache::ensure_for_envelope`). With `verify`, the length
 /// and BLAKE3 digest are checked.
 pub fn decode_envelope(envelope: &[u8], params: &ParamCache, verify: bool, object_id: Option<u64>) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    decode_envelope_into(envelope, params, verify, object_id, &mut out)?;
+    Ok(out)
+}
+
+/// `decode_envelope` into a reusable buffer (cleared first). On success `out`
+/// holds exactly the header's `raw_len` bytes.
+pub fn decode_envelope_into(
+    envelope: &[u8],
+    params: &ParamCache,
+    verify: bool,
+    object_id: Option<u64>,
+    out: &mut Vec<u8>,
+) -> Result<()> {
     let (h, body) = format::read_envelope(envelope)?;
     let needed = codec::required_param(h.codec, h.aux_id);
     let entry = match needed {
@@ -112,12 +126,13 @@ pub fn decode_envelope(envelope: &[u8], params: &ParamCache, verify: bool, objec
         (Some(ParamEntry::Template(t)), Some(param_kind::TEMPLATE)) => Deps { zstd_dict: None, template: Some(t.as_ref()) },
         _ => return Err(Error::integrity(object_id, "param kind does not match codec")),
     };
-    let mut out = Vec::with_capacity(h.raw_len as usize);
-    codec::decode(h.codec, h.aux_id, body, h.raw_len, deps, &mut out)?;
-    if verify && hash::digest(&out) != h.digest {
+    out.clear();
+    out.reserve(h.raw_len as usize);
+    codec::decode(h.codec, h.aux_id, body, h.raw_len, deps, out)?;
+    if verify && hash::digest(out) != h.digest {
         return Err(Error::integrity(object_id, "BLAKE3 digest mismatch"));
     }
-    Ok(out)
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
