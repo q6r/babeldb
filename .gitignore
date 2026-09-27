@@ -2,3 +2,4 @@
 /bench-results/tmp
 *.redb.tmp
 /data
+/.worktrees
