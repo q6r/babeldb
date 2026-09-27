@@ -348,6 +348,21 @@ impl<S: Store> Db<S> {
         todo!()
     }
 
+    /// Group-commit primitive: apply, in order and in ONE commit with the given
+    /// durability, every op whose expectation holds. Ops whose expectation fails
+    /// (or that are invalid) are skipped and reported individually; the others
+    /// are still applied. The outer `Err` is reserved for failures that abort the
+    /// whole transaction (I/O, backend, integrity).
+    pub fn write_batch_each(&self, ops: &[BatchOp<'_>], durability: Durability) -> Result<Vec<Result<Option<Revision>>>> {
+        todo!()
+    }
+
+    /// Make every previously committed `Durability::Deferred` transaction
+    /// durable (an empty `Immediate` commit).
+    pub fn sync(&self) -> Result<()> {
+        todo!()
+    }
+
     /// Ordered range scan over live records.
     pub fn scan(&self, opts: &ScanOptions) -> Result<Vec<ScanItem>> {
         todo!()
