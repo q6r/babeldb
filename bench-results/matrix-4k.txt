@@ -1,0 +1,435 @@
+    Finished `bench` profile [optimized + debuginfo] target(s) in 0.27s
+     Running benches\engine.rs (target\release\deps\engine-429a5c126f35b0fc.exe)
+babeldb engine bench run 1790517570222-120656 ({"os":"windows","os_version":"10.0.26200.9457","arch":"x86_64","cpu":"AMD Ryzen 7 5700","logical_cpus":16,"ram_total_bytes":34139103232,"ram_available_bytes_at_start":11037569024,"fs":{"root":"C:\\","file_system":"NTFS","cluster_bytes":4096,"total_bytes":999044411392,"free_bytes":94493589504},"rustc":"rustc 1.97.1 (8bab26f4f 2026-07-14)","profile":"release","features":[],"git_commit":"c6a92f5e35dcf0e59eeab7963cbac629e2f84204","git_dirty":false,"cargo_lock_blake3":"9af83afbe404491a1c9a23e780d40864e3a2a5b434b8bb4abb4e53789e74cde2","datasets_version":1,"zstd":"1.5.7","bench_exe_bytes":2764800,"note":"KINGSTON SNV3S1000G NVMe; OS file cache warm; machine otherwise idle"})
+[redb raw-backend s1-repetitive] start, dir bench-results/tmp\1790517570222-120656-redb-raw-backend-s1
+[redb raw-backend s1-repetitive] load: 20000 records, 82.4 MB in 0.82s of commits -> 24340 rec/s, 100.3 MB/s; batch p50 29.73ms p95 109.61ms p99 131.28ms p99.9 131.28ms max 131.28ms
+[redb raw-backend s1-repetitive] space: user 82.44 MB, files 269.49 MB apparent / 269.49 MB allocated
+[redb raw-backend s1-repetitive] put-durable: 200 ops p50 1.95ms p95 2.61ms p99 2.89ms p99.9 4.67ms max 4.67ms
+[redb raw-backend s1-repetitive] get: 10000 ops p50 11.1us p95 35.8us p99 78.4us p99.9 442.2us max 8.59ms (64934 ops/s)
+[redb raw-backend s1-repetitive] miss: 10000 ops p50 8.6us p95 23.6us p99 38.1us p99.9 89.0us max 1.29ms
+[redb raw-backend s1-repetitive] range: 10000 ops p50 8.6us p95 19.7us p99 31.9us p99.9 77.9us max 773.0us
+[redb raw-backend s1-repetitive] mt-get x16: 160000 ops, 61126 ops/s aggregate, p50 26.7us p95 869.0us p99 1.99ms p99.9 6.10ms max 23.48ms
+[redb raw-backend s1-repetitive] done
+[redb raw-backend s2-sequences] start, dir bench-results/tmp\1790517570222-120656-redb-raw-backend-s2
+[redb raw-backend s2-sequences] load: 20000 records, 82.4 MB in 1.12s of commits -> 17862 rec/s, 73.6 MB/s; batch p50 39.59ms p95 106.79ms p99 218.33ms p99.9 218.33ms max 218.33ms
+[redb raw-backend s2-sequences] space: user 82.42 MB, files 269.49 MB apparent / 269.49 MB allocated
+[redb raw-backend s2-sequences] put-durable: 200 ops p50 2.08ms p95 2.47ms p99 3.42ms p99.9 7.64ms max 7.64ms
+[redb raw-backend s2-sequences] get: 10000 ops p50 10.0us p95 28.1us p99 49.5us p99.9 143.2us max 338.1us (85395 ops/s)
+[redb raw-backend s2-sequences] miss: 10000 ops p50 9.9us p95 28.9us p99 46.6us p99.9 88.5us max 335.1us
+[redb raw-backend s2-sequences] range: 10000 ops p50 11.4us p95 32.8us p99 59.8us p99.9 153.3us max 1.51ms
+[redb raw-backend s2-sequences] mt-get x16: 160000 ops, 81976 ops/s aggregate, p50 24.2us p95 676.0us p99 1.15ms p99.9 2.33ms max 6.68ms
+[redb raw-backend s2-sequences] done
+[redb raw-backend s3-chat-json] start, dir bench-results/tmp\1790517570222-120656-redb-raw-backend-s3
+[redb raw-backend s3-chat-json] load: 20000 records, 82.6 MB in 0.75s of commits -> 26640 rec/s, 110.1 MB/s; batch p50 31.72ms p95 64.48ms p99 91.69ms p99.9 91.69ms max 91.69ms
+[redb raw-backend s3-chat-json] space: user 82.64 MB, files 269.49 MB apparent / 269.49 MB allocated
+[redb raw-backend s3-chat-json] put-durable: 200 ops p50 1.57ms p95 1.89ms p99 2.19ms p99.9 2.66ms max 2.66ms
+[redb raw-backend s3-chat-json] get: 10000 ops p50 7.9us p95 18.5us p99 31.2us p99.9 69.4us max 1.28ms (122961 ops/s)
+[redb raw-backend s3-chat-json] miss: 10000 ops p50 8.6us p95 22.4us p99 37.4us p99.9 70.3us max 1.35ms
+[redb raw-backend s3-chat-json] range: 10000 ops p50 8.6us p95 20.2us p99 34.2us p99.9 62.1us max 1.08ms
+[redb raw-backend s3-chat-json] latest50: 10000 scans p50 14.7us p95 147.1us p99 371.4us p99.9 589.1us max 1.48ms (10.7 items/scan)
+[redb raw-backend s3-chat-json] mt-get x16: 160000 ops, 111014 ops/s aggregate, p50 17.4us p95 465.5us p99 711.9us p99.9 1.28ms max 2.86ms
+[redb raw-backend s3-chat-json] done
+[redb raw-backend s4-duplicates] start, dir bench-results/tmp\1790517570222-120656-redb-raw-backend-s4
+[redb raw-backend s4-duplicates] load: 20000 records, 82.4 MB in 0.59s of commits -> 33754 rec/s, 139.1 MB/s; batch p50 24.22ms p95 53.40ms p99 84.77ms p99.9 84.77ms max 84.77ms
+[redb raw-backend s4-duplicates] space: user 82.44 MB, files 269.49 MB apparent / 269.49 MB allocated
+[redb raw-backend s4-duplicates] put-durable: 200 ops p50 1.58ms p95 1.89ms p99 2.14ms p99.9 2.66ms max 2.66ms
+[redb raw-backend s4-duplicates] get: 10000 ops p50 7.6us p95 16.1us p99 27.3us p99.9 66.1us max 1.06ms (135398 ops/s)
+[redb raw-backend s4-duplicates] miss: 10000 ops p50 7.5us p95 14.8us p99 23.4us p99.9 46.5us max 1.01ms
+[redb raw-backend s4-duplicates] range: 10000 ops p50 7.8us p95 17.4us p99 29.7us p99.9 77.0us max 1.24ms
+[redb raw-backend s4-duplicates] mt-get x16: 160000 ops, 111727 ops/s aggregate, p50 17.8us p95 461.3us p99 699.3us p99.9 1.15ms max 2.10ms
+[redb raw-backend s4-duplicates] done
+[redb raw-backend s5-high-entropy] start, dir bench-results/tmp\1790517570222-120656-redb-raw-backend-s5
+[redb raw-backend s5-high-entropy] load: 20000 records, 82.5 MB in 0.58s of commits -> 34333 rec/s, 141.6 MB/s; batch p50 22.61ms p95 51.67ms p99 89.22ms p99.9 89.22ms max 89.22ms
+[redb raw-backend s5-high-entropy] space: user 82.48 MB, files 269.49 MB apparent / 269.49 MB allocated
+[redb raw-backend s5-high-entropy] put-durable: 200 ops p50 1.58ms p95 1.94ms p99 2.18ms p99.9 2.25ms max 2.25ms
+[redb raw-backend s5-high-entropy] get: 10000 ops p50 9.2us p95 21.6us p99 35.6us p99.9 64.4us max 257.1us (104992 ops/s)
+[redb raw-backend s5-high-entropy] miss: 10000 ops p50 7.7us p95 17.0us p99 27.6us p99.9 77.9us max 147.9us
+[redb raw-backend s5-high-entropy] range: 10000 ops p50 8.3us p95 19.8us p99 32.6us p99.9 88.6us max 910.1us
+[redb raw-backend s5-high-entropy] mt-get x16: 160000 ops, 97238 ops/s aggregate, p50 21.4us p95 532.5us p99 842.4us p99.9 1.55ms max 3.65ms
+[redb raw-backend s5-high-entropy] done
+[redb raw-backend s6-compressed] start, dir bench-results/tmp\1790517570222-120656-redb-raw-backend-s6
+[redb raw-backend s6-compressed] load: 20000 records, 82.7 MB in 0.66s of commits -> 30232 rec/s, 125.1 MB/s; batch p50 25.88ms p95 59.50ms p99 88.08ms p99.9 88.08ms max 88.08ms
+[redb raw-backend s6-compressed] space: user 82.74 MB, files 269.49 MB apparent / 269.49 MB allocated
+[redb raw-backend s6-compressed] put-durable: 200 ops p50 1.72ms p95 2.04ms p99 2.18ms p99.9 2.69ms max 2.69ms
+[redb raw-backend s6-compressed] get: 10000 ops p50 7.8us p95 16.4us p99 25.4us p99.9 59.8us max 955.7us (132498 ops/s)
+[redb raw-backend s6-compressed] miss: 10000 ops p50 7.8us p95 17.4us p99 27.3us p99.9 64.9us max 1.32ms
+[redb raw-backend s6-compressed] range: 10000 ops p50 8.2us p95 18.1us p99 29.0us p99.9 55.1us max 831.2us
+[redb raw-backend s6-compressed] mt-get x16: 160000 ops, 88590 ops/s aggregate, p50 22.0us p95 610.7us p99 966.1us p99.9 1.82ms max 4.23ms
+[redb raw-backend s6-compressed] done
+[redb engine-raw s1-repetitive] start, dir bench-results/tmp\1790517570222-120656-redb-engine-raw-s1
+[redb engine-raw s1-repetitive] load: 20000 records, 82.4 MB in 1.03s of commits -> 19404 rec/s, 80.0 MB/s; batch p50 40.62ms p95 81.29ms p99 100.81ms p99.9 100.81ms max 100.81ms
+[redb engine-raw s1-repetitive] space: user 82.44 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 84.92 MB
+[redb engine-raw s1-repetitive] put-durable: 200 ops p50 2.55ms p95 3.37ms p99 4.19ms p99.9 5.51ms max 5.51ms
+[redb engine-raw s1-repetitive] get: 10000 ops p50 6.5us p95 29.8us p99 66.6us p99.9 147.2us max 1.53ms (82233 ops/s)
+[redb engine-raw s1-repetitive] miss: 10000 ops p50 1.3us p95 1.9us p99 2.5us p99.9 16.7us max 60.7us
+[redb engine-raw s1-repetitive] range: 10000 ops p50 7.0us p95 38.4us p99 95.1us p99.9 226.5us max 9.03ms
+[redb engine-raw s1-repetitive] mt-get x16: 160000 ops, 288801 ops/s aggregate, p50 4.3us p95 350.1us p99 737.0us p99.9 1.34ms max 2.58ms
+[redb engine-raw s1-repetitive] done
+[redb engine-raw s2-sequences] start, dir bench-results/tmp\1790517570222-120656-redb-engine-raw-s2
+[redb engine-raw s2-sequences] load: 20000 records, 82.4 MB in 0.87s of commits -> 22881 rec/s, 94.3 MB/s; batch p50 38.05ms p95 72.95ms p99 96.35ms p99.9 96.35ms max 96.35ms
+[redb engine-raw s2-sequences] space: user 82.42 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 84.90 MB
+[redb engine-raw s2-sequences] put-durable: 200 ops p50 2.26ms p95 3.31ms p99 3.74ms p99.9 4.64ms max 4.64ms
+[redb engine-raw s2-sequences] get: 10000 ops p50 5.4us p95 27.2us p99 63.1us p99.9 134.8us max 219.1us (89928 ops/s)
+[redb engine-raw s2-sequences] miss: 10000 ops p50 1.3us p95 2.4us p99 3.2us p99.9 16.2us max 104.0us
+[redb engine-raw s2-sequences] range: 10000 ops p50 5.0us p95 25.3us p99 50.1us p99.9 135.5us max 942.2us
+[redb engine-raw s2-sequences] mt-get x16: 160000 ops, 301622 ops/s aggregate, p50 4.0us p95 334.9us p99 716.5us p99.9 1.30ms max 2.70ms
+[redb engine-raw s2-sequences] done
+[redb engine-raw s3-chat-json] start, dir bench-results/tmp\1790517570222-120656-redb-engine-raw-s3
+[redb engine-raw s3-chat-json] load: 20000 records, 82.6 MB in 0.96s of commits -> 20735 rec/s, 85.7 MB/s; batch p50 40.87ms p95 75.98ms p99 100.99ms p99.9 100.99ms max 100.99ms
+[redb engine-raw s3-chat-json] space: user 82.64 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 85.12 MB
+[redb engine-raw s3-chat-json] put-durable: 200 ops p50 2.55ms p95 4.10ms p99 6.53ms p99.9 8.41ms max 8.41ms
+[redb engine-raw s3-chat-json] get: 10000 ops p50 5.0us p95 24.4us p99 54.2us p99.9 122.1us max 184.5us (96062 ops/s)
+[redb engine-raw s3-chat-json] miss: 10000 ops p50 1.4us p95 2.5us p99 3.4us p99.9 10.8us max 35.0us
+[redb engine-raw s3-chat-json] range: 10000 ops p50 5.5us p95 25.7us p99 58.8us p99.9 131.4us max 187.3us
+[redb engine-raw s3-chat-json] latest50: 10000 scans p50 12.4us p95 62.9us p99 97.0us p99.9 184.1us max 1.79ms (10.7 items/scan)
+[redb engine-raw s3-chat-json] mt-get x16: 160000 ops, 276161 ops/s aggregate, p50 4.2us p95 372.3us p99 781.3us p99.9 1.60ms max 5.26ms
+[redb engine-raw s3-chat-json] done
+[redb engine-raw s4-duplicates] start, dir bench-results/tmp\1790517570222-120656-redb-engine-raw-s4
+[redb engine-raw s4-duplicates] load: 20000 records, 82.4 MB in 0.67s of commits -> 29833 rec/s, 123.0 MB/s; batch p50 27.97ms p95 61.98ms p99 82.78ms p99.9 82.78ms max 82.78ms
+[redb engine-raw s4-duplicates] space: user 82.44 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 84.92 MB
+[redb engine-raw s4-duplicates] put-durable: 200 ops p50 1.87ms p95 2.22ms p99 2.42ms p99.9 4.58ms max 4.58ms
+[redb engine-raw s4-duplicates] get: 10000 ops p50 4.1us p95 21.8us p99 42.3us p99.9 115.4us max 152.1us (108171 ops/s)
+[redb engine-raw s4-duplicates] miss: 10000 ops p50 900ns p95 1.3us p99 1.8us p99.9 7.7us max 57.9us
+[redb engine-raw s4-duplicates] range: 10000 ops p50 4.3us p95 22.4us p99 46.8us p99.9 111.7us max 163.9us
+[redb engine-raw s4-duplicates] mt-get x16: 160000 ops, 295672 ops/s aggregate, p50 4.0us p95 343.6us p99 728.7us p99.9 1.31ms max 2.56ms
+[redb engine-raw s4-duplicates] done
+[redb engine-raw s5-high-entropy] start, dir bench-results/tmp\1790517570222-120656-redb-engine-raw-s5
+[redb engine-raw s5-high-entropy] load: 20000 records, 82.5 MB in 0.82s of commits -> 24376 rec/s, 100.5 MB/s; batch p50 37.00ms p95 61.81ms p99 92.90ms p99.9 92.90ms max 92.90ms
+[redb engine-raw s5-high-entropy] space: user 82.48 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 84.96 MB
+[redb engine-raw s5-high-entropy] put-durable: 200 ops p50 2.19ms p95 3.01ms p99 3.85ms p99.9 4.49ms max 4.49ms
+[redb engine-raw s5-high-entropy] get: 10000 ops p50 6.7us p95 34.3us p99 83.5us p99.9 156.7us max 1.22ms (71826 ops/s)
+[redb engine-raw s5-high-entropy] miss: 10000 ops p50 1.3us p95 2.0us p99 2.6us p99.9 12.7us max 65.0us
+[redb engine-raw s5-high-entropy] range: 10000 ops p50 5.3us p95 25.7us p99 55.7us p99.9 136.9us max 1.23ms
+[redb engine-raw s5-high-entropy] mt-get x16: 160000 ops, 311045 ops/s aggregate, p50 3.9us p95 336.3us p99 697.6us p99.9 1.26ms max 2.60ms
+[redb engine-raw s5-high-entropy] done
+[redb engine-raw s6-compressed] start, dir bench-results/tmp\1790517570222-120656-redb-engine-raw-s6
+[redb engine-raw s6-compressed] load: 20000 records, 82.7 MB in 0.81s of commits -> 24652 rec/s, 102.0 MB/s; batch p50 36.02ms p95 63.30ms p99 97.43ms p99.9 97.43ms max 97.43ms
+[redb engine-raw s6-compressed] space: user 82.74 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 85.22 MB
+[redb engine-raw s6-compressed] put-durable: 200 ops p50 2.14ms p95 2.80ms p99 3.27ms p99.9 3.63ms max 3.63ms
+[redb engine-raw s6-compressed] get: 10000 ops p50 5.0us p95 26.0us p99 53.7us p99.9 119.2us max 180.3us (93354 ops/s)
+[redb engine-raw s6-compressed] miss: 10000 ops p50 1.6us p95 2.7us p99 3.6us p99.9 71.1us max 2.33ms
+[redb engine-raw s6-compressed] range: 10000 ops p50 5.5us p95 31.8us p99 73.1us p99.9 173.5us max 1.29ms
+[redb engine-raw s6-compressed] mt-get x16: 160000 ops, 306049 ops/s aggregate, p50 4.0us p95 329.0us p99 710.1us p99.9 1.28ms max 3.23ms
+[redb engine-raw s6-compressed] done
+[redb babel-pure s1-repetitive] start, dir bench-results/tmp\1790517570222-120656-redb-babel-pure-s1
+[redb babel-pure s1-repetitive] load: 20000 records, 82.4 MB in 0.90s of commits -> 22338 rec/s, 92.1 MB/s; batch p50 40.12ms p95 65.72ms p99 106.54ms p99.9 106.54ms max 106.54ms
+[redb babel-pure s1-repetitive] space: user 82.44 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 84.92 MB
+[redb babel-pure s1-repetitive] put-durable: 200 ops p50 2.05ms p95 2.73ms p99 3.01ms p99.9 3.31ms max 3.31ms
+[redb babel-pure s1-repetitive] get: 10000 ops p50 6.1us p95 28.4us p99 58.1us p99.9 138.0us max 1.10ms (84840 ops/s)
+[redb babel-pure s1-repetitive] miss: 10000 ops p50 1.7us p95 2.9us p99 3.5us p99.9 15.8us max 58.0us
+[redb babel-pure s1-repetitive] range: 10000 ops p50 4.8us p95 24.3us p99 58.8us p99.9 117.7us max 1.06ms
+[redb babel-pure s1-repetitive] mt-get x16: 160000 ops, 288975 ops/s aggregate, p50 4.2us p95 349.5us p99 737.1us p99.9 1.33ms max 2.92ms
+[redb babel-pure s1-repetitive] done
+[redb babel-pure s2-sequences] start, dir bench-results/tmp\1790517570222-120656-redb-babel-pure-s2
+[redb babel-pure s2-sequences] load: 20000 records, 82.4 MB in 0.83s of commits -> 24208 rec/s, 99.8 MB/s; batch p50 34.86ms p95 67.70ms p99 87.98ms p99.9 87.98ms max 87.98ms
+[redb babel-pure s2-sequences] space: user 82.42 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 84.90 MB
+[redb babel-pure s2-sequences] put-durable: 200 ops p50 2.17ms p95 2.82ms p99 3.53ms p99.9 8.26ms max 8.26ms
+[redb babel-pure s2-sequences] get: 10000 ops p50 5.8us p95 30.0us p99 58.2us p99.9 154.0us max 242.6us (82830 ops/s)
+[redb babel-pure s2-sequences] miss: 10000 ops p50 1.1us p95 2.4us p99 3.1us p99.9 8.6us max 47.7us
+[redb babel-pure s2-sequences] range: 10000 ops p50 5.3us p95 28.6us p99 57.7us p99.9 132.9us max 1.43ms
+[redb babel-pure s2-sequences] mt-get x16: 160000 ops, 296173 ops/s aggregate, p50 4.1us p95 346.7us p99 721.1us p99.9 1.29ms max 2.96ms
+[redb babel-pure s2-sequences] done
+[redb babel-pure s3-chat-json] start, dir bench-results/tmp\1790517570222-120656-redb-babel-pure-s3
+[redb babel-pure s3-chat-json] load: 20000 records, 82.6 MB in 0.86s of commits -> 23355 rec/s, 96.5 MB/s; batch p50 38.89ms p95 65.38ms p99 91.98ms p99.9 91.98ms max 91.98ms
+[redb babel-pure s3-chat-json] space: user 82.64 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 85.12 MB
+[redb babel-pure s3-chat-json] put-durable: 200 ops p50 2.03ms p95 2.45ms p99 2.71ms p99.9 2.79ms max 2.79ms
+[redb babel-pure s3-chat-json] get: 10000 ops p50 3.9us p95 20.5us p99 43.6us p99.9 123.3us max 886.1us (109420 ops/s)
+[redb babel-pure s3-chat-json] miss: 10000 ops p50 1.0us p95 1.4us p99 1.8us p99.9 2.6us max 11.7us
+[redb babel-pure s3-chat-json] range: 10000 ops p50 4.0us p95 21.5us p99 34.4us p99.9 82.8us max 118.8us
+[redb babel-pure s3-chat-json] latest50: 10000 scans p50 11.9us p95 63.6us p99 92.1us p99.9 176.8us max 1.57ms (10.7 items/scan)
+[redb babel-pure s3-chat-json] mt-get x16: 160000 ops, 272748 ops/s aggregate, p50 4.3us p95 366.5us p99 804.9us p99.9 1.64ms max 13.10ms
+[redb babel-pure s3-chat-json] done
+[redb babel-pure s4-duplicates] start, dir bench-results/tmp\1790517570222-120656-redb-babel-pure-s4
+[redb babel-pure s4-duplicates] load: 20000 records, 82.4 MB in 0.76s of commits -> 26342 rec/s, 108.6 MB/s; batch p50 30.68ms p95 67.93ms p99 93.05ms p99.9 93.05ms max 93.05ms
+[redb babel-pure s4-duplicates] space: user 82.44 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 84.92 MB
+[redb babel-pure s4-duplicates] put-durable: 200 ops p50 2.19ms p95 2.73ms p99 3.16ms p99.9 3.43ms max 3.43ms
+[redb babel-pure s4-duplicates] get: 10000 ops p50 6.1us p95 32.3us p99 66.0us p99.9 129.5us max 184.3us (79679 ops/s)
+[redb babel-pure s4-duplicates] miss: 10000 ops p50 1.0us p95 2.1us p99 3.0us p99.9 8.4us max 35.6us
+[redb babel-pure s4-duplicates] range: 10000 ops p50 5.5us p95 26.5us p99 49.7us p99.9 108.1us max 184.2us
+[redb babel-pure s4-duplicates] mt-get x16: 160000 ops, 309408 ops/s aggregate, p50 4.0us p95 332.8us p99 707.5us p99.9 1.23ms max 2.82ms
+[redb babel-pure s4-duplicates] done
+[redb babel-pure s5-high-entropy] start, dir bench-results/tmp\1790517570222-120656-redb-babel-pure-s5
+[redb babel-pure s5-high-entropy] load: 20000 records, 82.5 MB in 0.69s of commits -> 28897 rec/s, 119.2 MB/s; batch p50 28.28ms p95 55.28ms p99 89.19ms p99.9 89.19ms max 89.19ms
+[redb babel-pure s5-high-entropy] space: user 82.48 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 84.96 MB
+[redb babel-pure s5-high-entropy] put-durable: 200 ops p50 1.95ms p95 2.34ms p99 2.57ms p99.9 2.71ms max 2.71ms
+[redb babel-pure s5-high-entropy] get: 10000 ops p50 4.2us p95 21.0us p99 34.2us p99.9 83.8us max 1.05ms (112014 ops/s)
+[redb babel-pure s5-high-entropy] miss: 10000 ops p50 1.2us p95 1.7us p99 2.3us p99.9 5.7us max 22.1us
+[redb babel-pure s5-high-entropy] range: 10000 ops p50 4.9us p95 25.0us p99 46.4us p99.9 99.5us max 1.01ms
+[redb babel-pure s5-high-entropy] mt-get x16: 160000 ops, 345129 ops/s aggregate, p50 3.5us p95 290.7us p99 640.9us p99.9 1.18ms max 2.19ms
+[redb babel-pure s5-high-entropy] done
+[redb babel-pure s6-compressed] start, dir bench-results/tmp\1790517570222-120656-redb-babel-pure-s6
+[redb babel-pure s6-compressed] load: 20000 records, 82.7 MB in 0.75s of commits -> 26541 rec/s, 109.8 MB/s; batch p50 32.41ms p95 57.72ms p99 102.98ms p99.9 102.98ms max 102.98ms
+[redb babel-pure s6-compressed] space: user 82.74 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 85.22 MB
+[redb babel-pure s6-compressed] put-durable: 200 ops p50 2.10ms p95 2.64ms p99 3.12ms p99.9 3.30ms max 3.30ms
+[redb babel-pure s6-compressed] get: 10000 ops p50 5.6us p95 28.3us p99 62.3us p99.9 184.5us max 268.9us (85397 ops/s)
+[redb babel-pure s6-compressed] miss: 10000 ops p50 1.3us p95 1.9us p99 2.4us p99.9 3.9us max 32.4us
+[redb babel-pure s6-compressed] range: 10000 ops p50 5.0us p95 24.9us p99 60.2us p99.9 165.2us max 1.17ms
+[redb babel-pure s6-compressed] mt-get x16: 160000 ops, 274474 ops/s aggregate, p50 4.3us p95 375.1us p99 780.4us p99.9 1.65ms max 3.94ms
+[redb babel-pure s6-compressed] done
+[redb lz4 s1-repetitive] start, dir bench-results/tmp\1790517570222-120656-redb-lz4-s1
+[redb lz4 s1-repetitive] load: 20000 records, 82.4 MB in 0.25s of commits -> 79436 rec/s, 327.4 MB/s; batch p50 12.12ms p95 13.92ms p99 15.90ms p99.9 15.90ms max 15.90ms
+[redb lz4 s1-repetitive] space: user 82.44 MB, files 8.43 MB apparent / 8.43 MB allocated, engine payload 3.87 MB
+[redb lz4 s1-repetitive] put-durable: 200 ops p50 1.93ms p95 2.39ms p99 2.75ms p99.9 4.13ms max 4.13ms
+[redb lz4 s1-repetitive] get: 10000 ops p50 3.8us p95 7.7us p99 17.5us p99.9 113.0us max 147.8us (200869 ops/s)
+[redb lz4 s1-repetitive] miss: 10000 ops p50 1.0us p95 1.5us p99 2.0us p99.9 3.4us max 14.2us
+[redb lz4 s1-repetitive] range: 10000 ops p50 3.8us p95 7.5us p99 11.8us p99.9 60.2us max 119.9us
+[redb lz4 s1-repetitive] mt-get x16: 160000 ops, 1860076 ops/s aggregate, p50 4.2us p95 10.2us p99 20.3us p99.9 422.2us max 7.43ms
+[redb lz4 s1-repetitive] done
+[redb lz4 s2-sequences] start, dir bench-results/tmp\1790517570222-120656-redb-lz4-s2
+[redb lz4 s2-sequences] load: 20000 records, 82.4 MB in 0.70s of commits -> 28535 rec/s, 117.6 MB/s; batch p50 31.04ms p95 50.98ms p99 81.80ms p99.9 81.80ms max 81.80ms
+[redb lz4 s2-sequences] space: user 82.42 MB, files 134.75 MB apparent / 134.75 MB allocated, engine payload 59.34 MB
+[redb lz4 s2-sequences] put-durable: 200 ops p50 1.90ms p95 2.45ms p99 2.96ms p99.9 3.10ms max 3.10ms
+[redb lz4 s2-sequences] get: 10000 ops p50 5.1us p95 25.7us p99 91.8us p99.9 149.9us max 1.09ms (87969 ops/s)
+[redb lz4 s2-sequences] miss: 10000 ops p50 1.3us p95 2.5us p99 3.1us p99.9 13.5us max 116.9us
+[redb lz4 s2-sequences] range: 10000 ops p50 5.7us p95 28.1us p99 46.5us p99.9 74.0us max 103.9us
+[redb lz4 s2-sequences] mt-get x16: 160000 ops, 479042 ops/s aggregate, p50 4.5us p95 226.2us p99 574.3us p99.9 1.15ms max 2.54ms
+[redb lz4 s2-sequences] done
+[redb lz4 s3-chat-json] start, dir bench-results/tmp\1790517570222-120656-redb-lz4-s3
+[redb lz4 s3-chat-json] load: 20000 records, 82.6 MB in 1.06s of commits -> 18911 rec/s, 78.1 MB/s; batch p50 46.21ms p95 85.84ms p99 90.01ms p99.9 90.01ms max 90.01ms
+[redb lz4 s3-chat-json] space: user 82.64 MB, files 134.75 MB apparent / 134.75 MB allocated, engine payload 61.52 MB
+[redb lz4 s3-chat-json] put-durable: 200 ops p50 2.51ms p95 3.14ms p99 3.49ms p99.9 3.52ms max 3.52ms
+[redb lz4 s3-chat-json] get: 10000 ops p50 6.0us p95 28.9us p99 92.0us p99.9 161.3us max 722.8us (82800 ops/s)
+[redb lz4 s3-chat-json] miss: 10000 ops p50 1.5us p95 2.7us p99 3.6us p99.9 14.9us max 114.9us
+[redb lz4 s3-chat-json] range: 10000 ops p50 7.0us p95 37.6us p99 70.0us p99.9 122.8us max 324.9us
+[redb lz4 s3-chat-json] latest50: 10000 scans p50 10.7us p95 57.4us p99 79.9us p99.9 108.3us max 149.9us (10.7 items/scan)
+[redb lz4 s3-chat-json] mt-get x16: 160000 ops, 439715 ops/s aggregate, p50 4.7us p95 252.7us p99 622.8us p99.9 1.19ms max 3.66ms
+[redb lz4 s3-chat-json] done
+[redb lz4 s4-duplicates] start, dir bench-results/tmp\1790517570222-120656-redb-lz4-s4
+[redb lz4 s4-duplicates] load: 20000 records, 82.4 MB in 0.94s of commits -> 21292 rec/s, 87.8 MB/s; batch p50 41.29ms p95 73.56ms p99 99.85ms p99.9 99.85ms max 99.85ms
+[redb lz4 s4-duplicates] space: user 82.44 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 84.92 MB
+[redb lz4 s4-duplicates] put-durable: 200 ops p50 2.23ms p95 2.68ms p99 2.86ms p99.9 4.05ms max 4.05ms
+[redb lz4 s4-duplicates] get: 10000 ops p50 5.9us p95 28.0us p99 51.6us p99.9 117.5us max 270.4us (89791 ops/s)
+[redb lz4 s4-duplicates] miss: 10000 ops p50 1.4us p95 2.4us p99 3.0us p99.9 9.6us max 74.6us
+[redb lz4 s4-duplicates] range: 10000 ops p50 8.6us p95 41.5us p99 76.1us p99.9 171.2us max 246.0us
+[redb lz4 s4-duplicates] mt-get x16: 160000 ops, 286780 ops/s aggregate, p50 4.4us p95 351.3us p99 758.5us p99.9 1.39ms max 3.07ms
+[redb lz4 s4-duplicates] done
+[redb lz4 s5-high-entropy] start, dir bench-results/tmp\1790517570222-120656-redb-lz4-s5
+[redb lz4 s5-high-entropy] load: 20000 records, 82.5 MB in 0.75s of commits -> 26588 rec/s, 109.7 MB/s; batch p50 31.97ms p95 61.29ms p99 88.37ms p99.9 88.37ms max 88.37ms
+[redb lz4 s5-high-entropy] space: user 82.48 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 84.96 MB
+[redb lz4 s5-high-entropy] put-durable: 200 ops p50 2.41ms p95 3.12ms p99 3.25ms p99.9 3.50ms max 3.50ms
+[redb lz4 s5-high-entropy] get: 10000 ops p50 6.7us p95 37.1us p99 79.5us p99.9 141.2us max 1.42ms (68941 ops/s)
+[redb lz4 s5-high-entropy] miss: 10000 ops p50 1.9us p95 3.6us p99 4.2us p99.9 30.7us max 182.4us
+[redb lz4 s5-high-entropy] range: 10000 ops p50 8.6us p95 50.7us p99 114.1us p99.9 532.3us max 2.62ms
+[redb lz4 s5-high-entropy] mt-get x16: 160000 ops, 221253 ops/s aggregate, p50 5.5us p95 447.6us p99 963.0us p99.9 1.85ms max 4.03ms
+[redb lz4 s5-high-entropy] done
+[redb lz4 s6-compressed] start, dir bench-results/tmp\1790517570222-120656-redb-lz4-s6
+[redb lz4 s6-compressed] load: 20000 records, 82.7 MB in 0.97s of commits -> 20675 rec/s, 85.5 MB/s; batch p50 40.99ms p95 78.64ms p99 99.43ms p99.9 99.43ms max 99.43ms
+[redb lz4 s6-compressed] space: user 82.74 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 85.22 MB
+[redb lz4 s6-compressed] put-durable: 200 ops p50 2.50ms p95 3.09ms p99 3.75ms p99.9 4.86ms max 4.86ms
+[redb lz4 s6-compressed] get: 10000 ops p50 7.2us p95 34.9us p99 89.3us p99.9 216.7us max 1.54ms (69002 ops/s)
+[redb lz4 s6-compressed] miss: 10000 ops p50 1.5us p95 2.8us p99 3.6us p99.9 17.3us max 51.1us
+[redb lz4 s6-compressed] range: 10000 ops p50 6.5us p95 36.3us p99 74.1us p99.9 142.9us max 1.30ms
+[redb lz4 s6-compressed] mt-get x16: 160000 ops, 249258 ops/s aggregate, p50 5.0us p95 399.7us p99 847.3us p99.9 1.47ms max 3.15ms
+[redb lz4 s6-compressed] done
+[redb zstd s1-repetitive] start, dir bench-results/tmp\1790517570222-120656-redb-zstd-s1
+[redb zstd s1-repetitive] load: 20000 records, 82.4 MB in 0.30s of commits -> 66128 rec/s, 272.6 MB/s; batch p50 14.25ms p95 19.33ms p99 21.27ms p99.9 21.27ms max 21.27ms
+[redb zstd s1-repetitive] space: user 82.44 MB, files 8.43 MB apparent / 8.43 MB allocated, engine payload 3.70 MB
+[redb zstd s1-repetitive] put-durable: 200 ops p50 1.84ms p95 2.48ms p99 2.81ms p99.9 3.08ms max 3.08ms
+[redb zstd s1-repetitive] get: 10000 ops p50 4.8us p95 9.5us p99 18.0us p99.9 50.7us max 208.8us (188563 ops/s)
+[redb zstd s1-repetitive] miss: 10000 ops p50 1.2us p95 1.9us p99 2.3us p99.9 2.9us max 21.0us
+[redb zstd s1-repetitive] range: 10000 ops p50 4.9us p95 10.8us p99 20.0us p99.9 65.4us max 176.4us
+[redb zstd s1-repetitive] mt-get x16: 160000 ops, 1580122 ops/s aggregate, p50 4.4us p95 11.0us p99 19.1us p99.9 351.8us max 16.58ms
+[redb zstd s1-repetitive] done
+[redb zstd s2-sequences] start, dir bench-results/tmp\1790517570222-120656-redb-zstd-s2
+[redb zstd s2-sequences] load: 20000 records, 82.4 MB in 0.54s of commits -> 36983 rec/s, 152.4 MB/s; batch p50 25.96ms p95 34.30ms p99 41.38ms p99.9 41.38ms max 41.38ms
+[redb zstd s2-sequences] space: user 82.42 MB, files 67.38 MB apparent / 67.38 MB allocated, engine payload 31.12 MB
+[redb zstd s2-sequences] put-durable: 200 ops p50 2.25ms p95 2.91ms p99 4.26ms p99.9 6.30ms max 6.30ms
+[redb zstd s2-sequences] get: 10000 ops p50 6.7us p95 36.3us p99 112.4us p99.9 196.9us max 345.8us (68977 ops/s)
+[redb zstd s2-sequences] miss: 10000 ops p50 1.8us p95 3.0us p99 3.6us p99.9 31.6us max 78.3us
+[redb zstd s2-sequences] range: 10000 ops p50 6.5us p95 37.0us p99 62.7us p99.9 124.6us max 921.5us
+[redb zstd s2-sequences] mt-get x16: 160000 ops, 803762 ops/s aggregate, p50 4.3us p95 24.4us p99 258.5us p99.9 1.01ms max 21.56ms
+[redb zstd s2-sequences] done
+[redb zstd s3-chat-json] start, dir bench-results/tmp\1790517570222-120656-redb-zstd-s3
+[redb zstd s3-chat-json] load: 20000 records, 82.6 MB in 0.76s of commits -> 26474 rec/s, 109.4 MB/s; batch p50 35.53ms p95 51.71ms p99 57.77ms p99.9 57.77ms max 57.77ms
+[redb zstd s3-chat-json] space: user 82.64 MB, files 67.38 MB apparent / 67.38 MB allocated, engine payload 40.57 MB
+[redb zstd s3-chat-json] put-durable: 200 ops p50 2.32ms p95 2.95ms p99 4.00ms p99.9 4.33ms max 4.33ms
+[redb zstd s3-chat-json] get: 10000 ops p50 5.6us p95 34.2us p99 98.5us p99.9 179.1us max 280.6us (74134 ops/s)
+[redb zstd s3-chat-json] miss: 10000 ops p50 1.1us p95 2.0us p99 2.7us p99.9 14.8us max 63.4us
+[redb zstd s3-chat-json] range: 10000 ops p50 5.5us p95 32.2us p99 96.0us p99.9 190.4us max 827.3us
+[redb zstd s3-chat-json] latest50: 10000 scans p50 9.8us p95 51.8us p99 69.9us p99.9 107.6us max 329.1us (10.7 items/scan)
+[redb zstd s3-chat-json] mt-get x16: 160000 ops, 925611 ops/s aggregate, p50 4.4us p95 28.5us p99 231.4us p99.9 912.9us max 13.51ms
+[redb zstd s3-chat-json] done
+[redb zstd s4-duplicates] start, dir bench-results/tmp\1790517570222-120656-redb-zstd-s4
+[redb zstd s4-duplicates] load: 20000 records, 82.4 MB in 0.89s of commits -> 22555 rec/s, 93.0 MB/s; batch p50 38.82ms p95 71.26ms p99 97.92ms p99.9 97.92ms max 97.92ms
+[redb zstd s4-duplicates] space: user 82.44 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 84.92 MB
+[redb zstd s4-duplicates] put-durable: 200 ops p50 2.35ms p95 3.18ms p99 3.59ms p99.9 4.72ms max 4.72ms
+[redb zstd s4-duplicates] get: 10000 ops p50 7.0us p95 32.9us p99 58.5us p99.9 155.7us max 1.10ms (78854 ops/s)
+[redb zstd s4-duplicates] miss: 10000 ops p50 2.0us p95 3.7us p99 4.5us p99.9 24.1us max 88.6us
+[redb zstd s4-duplicates] range: 10000 ops p50 6.0us p95 28.0us p99 46.9us p99.9 90.2us max 157.8us
+[redb zstd s4-duplicates] mt-get x16: 160000 ops, 246573 ops/s aggregate, p50 5.0us p95 402.4us p99 857.6us p99.9 1.65ms max 4.24ms
+[redb zstd s4-duplicates] done
+[redb zstd s5-high-entropy] start, dir bench-results/tmp\1790517570222-120656-redb-zstd-s5
+[redb zstd s5-high-entropy] load: 20000 records, 82.5 MB in 0.92s of commits -> 21825 rec/s, 90.0 MB/s; batch p50 38.57ms p95 71.34ms p99 100.70ms p99.9 100.70ms max 100.70ms
+[redb zstd s5-high-entropy] space: user 82.48 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 84.96 MB
+[redb zstd s5-high-entropy] put-durable: 200 ops p50 2.18ms p95 2.86ms p99 3.18ms p99.9 4.03ms max 4.03ms
+[redb zstd s5-high-entropy] get: 10000 ops p50 6.7us p95 32.2us p99 77.3us p99.9 224.5us max 1.36ms (72982 ops/s)
+[redb zstd s5-high-entropy] miss: 10000 ops p50 2.1us p95 3.5us p99 4.5us p99.9 19.6us max 107.4us
+[redb zstd s5-high-entropy] range: 10000 ops p50 6.1us p95 30.8us p99 68.5us p99.9 197.4us max 343.4us
+[redb zstd s5-high-entropy] mt-get x16: 160000 ops, 224663 ops/s aggregate, p50 5.5us p95 440.0us p99 936.0us p99.9 1.69ms max 4.07ms
+[redb zstd s5-high-entropy] done
+[redb zstd s6-compressed] start, dir bench-results/tmp\1790517570222-120656-redb-zstd-s6
+[redb zstd s6-compressed] load: 20000 records, 82.7 MB in 1.12s of commits -> 17798 rec/s, 73.6 MB/s; batch p50 51.27ms p95 100.74ms p99 111.57ms p99.9 111.57ms max 111.57ms
+[redb zstd s6-compressed] space: user 82.74 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 85.22 MB
+[redb zstd s6-compressed] put-durable: 200 ops p50 2.87ms p95 3.62ms p99 4.81ms p99.9 11.07ms max 11.07ms
+[redb zstd s6-compressed] get: 10000 ops p50 6.5us p95 38.2us p99 96.5us p99.9 239.9us max 411.8us (65260 ops/s)
+[redb zstd s6-compressed] miss: 10000 ops p50 1.7us p95 2.9us p99 3.5us p99.9 20.5us max 74.1us
+[redb zstd s6-compressed] range: 10000 ops p50 8.5us p95 53.2us p99 141.4us p99.9 724.4us max 4.68ms
+[redb zstd s6-compressed] mt-get x16: 160000 ops, 207979 ops/s aggregate, p50 5.5us p95 466.2us p99 1.02ms p99.9 2.22ms max 9.62ms
+[redb zstd s6-compressed] done
+[redb adaptive-nodedupe s1-repetitive] start, dir bench-results/tmp\1790517570222-120656-redb-adaptive-nodedupe-s1
+[redb adaptive-nodedupe s1-repetitive] load: 20000 records, 82.4 MB in 0.37s of commits -> 54592 rec/s, 225.0 MB/s; batch p50 18.51ms p95 20.99ms p99 23.25ms p99.9 23.25ms max 23.25ms
+[redb adaptive-nodedupe s1-repetitive] space: user 82.44 MB, files 4.21 MB apparent / 4.21 MB allocated, engine payload 3.42 MB
+[redb adaptive-nodedupe s1-repetitive] put-durable: 200 ops p50 2.35ms p95 3.10ms p99 4.03ms p99.9 8.26ms max 8.26ms
+[redb adaptive-nodedupe s1-repetitive] get: 10000 ops p50 4.9us p95 8.8us p99 20.1us p99.9 55.5us max 79.7us (181984 ops/s)
+[redb adaptive-nodedupe s1-repetitive] miss: 10000 ops p50 1.3us p95 2.7us p99 3.3us p99.9 13.8us max 46.9us
+[redb adaptive-nodedupe s1-repetitive] range: 10000 ops p50 4.4us p95 8.0us p99 14.3us p99.9 42.6us max 87.6us
+[redb adaptive-nodedupe s1-repetitive] mt-get x16: 160000 ops, 1829312 ops/s aggregate, p50 4.3us p95 9.3us p99 20.8us p99.9 316.6us max 9.38ms
+[redb adaptive-nodedupe s1-repetitive] done
+[redb adaptive-nodedupe s2-sequences] start, dir bench-results/tmp\1790517570222-120656-redb-adaptive-nodedupe-s2
+[redb adaptive-nodedupe s2-sequences] load: 20000 records, 82.4 MB in 0.46s of commits -> 43915 rec/s, 181.0 MB/s; batch p50 21.68ms p95 29.18ms p99 29.20ms p99.9 29.20ms max 29.20ms
+[redb adaptive-nodedupe s2-sequences] space: user 82.42 MB, files 4.21 MB apparent / 4.21 MB allocated, engine payload 3.46 MB
+[redb adaptive-nodedupe s2-sequences] put-durable: 200 ops p50 2.46ms p95 3.57ms p99 4.58ms p99.9 6.58ms max 6.58ms
+[redb adaptive-nodedupe s2-sequences] get: 10000 ops p50 5.9us p95 11.5us p99 36.2us p99.9 100.2us max 274.1us (141701 ops/s)
+[redb adaptive-nodedupe s2-sequences] miss: 10000 ops p50 1.4us p95 2.5us p99 3.2us p99.9 27.7us max 169.9us
+[redb adaptive-nodedupe s2-sequences] range: 10000 ops p50 4.8us p95 9.8us p99 23.6us p99.9 74.8us max 184.5us
+[redb adaptive-nodedupe s2-sequences] mt-get x16: 160000 ops, 1473100 ops/s aggregate, p50 4.5us p95 9.9us p99 25.7us p99.9 833.0us max 8.09ms
+[redb adaptive-nodedupe s2-sequences] done
+[redb adaptive-nodedupe s3-chat-json] start, dir bench-results/tmp\1790517570222-120656-redb-adaptive-nodedupe-s3
+[redb adaptive-nodedupe s3-chat-json] load: 20000 records, 82.6 MB in 1.19s of commits -> 16827 rec/s, 69.5 MB/s; batch p50 50.25ms p95 110.26ms p99 157.89ms p99.9 157.89ms max 157.89ms
+[redb adaptive-nodedupe s3-chat-json] space: user 82.64 MB, files 67.38 MB apparent / 67.38 MB allocated, engine payload 40.57 MB
+[redb adaptive-nodedupe s3-chat-json] put-durable: 200 ops p50 2.62ms p95 3.38ms p99 4.25ms p99.9 5.04ms max 5.04ms
+[redb adaptive-nodedupe s3-chat-json] get: 10000 ops p50 6.3us p95 36.3us p99 65.6us p99.9 128.1us max 1.28ms (73308 ops/s)
+[redb adaptive-nodedupe s3-chat-json] miss: 10000 ops p50 1.0us p95 1.7us p99 2.3us p99.9 4.7us max 19.1us
+[redb adaptive-nodedupe s3-chat-json] range: 10000 ops p50 4.5us p95 28.3us p99 46.2us p99.9 79.7us max 110.7us
+[redb adaptive-nodedupe s3-chat-json] latest50: 10000 scans p50 10.9us p95 57.8us p99 87.2us p99.9 137.1us max 388.5us (10.7 items/scan)
+[redb adaptive-nodedupe s3-chat-json] mt-get x16: 160000 ops, 642929 ops/s aggregate, p50 4.7us p95 31.5us p99 276.6us p99.9 1.37ms max 17.25ms
+[redb adaptive-nodedupe s3-chat-json] done
+[redb adaptive-nodedupe s4-duplicates] start, dir bench-results/tmp\1790517570222-120656-redb-adaptive-nodedupe-s4
+[redb adaptive-nodedupe s4-duplicates] load: 20000 records, 82.4 MB in 0.84s of commits -> 23691 rec/s, 97.7 MB/s; batch p50 35.08ms p95 69.18ms p99 92.95ms p99.9 92.95ms max 92.95ms
+[redb adaptive-nodedupe s4-duplicates] space: user 82.44 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 84.92 MB
+[redb adaptive-nodedupe s4-duplicates] put-durable: 200 ops p50 3.42ms p95 8.17ms p99 11.37ms p99.9 17.31ms max 17.31ms
+[redb adaptive-nodedupe s4-duplicates] get: 10000 ops p50 6.4us p95 33.5us p99 77.7us p99.9 167.0us max 275.3us (75867 ops/s)
+[redb adaptive-nodedupe s4-duplicates] miss: 10000 ops p50 1.3us p95 2.6us p99 3.5us p99.9 23.7us max 67.3us
+[redb adaptive-nodedupe s4-duplicates] range: 10000 ops p50 5.8us p95 30.6us p99 64.4us p99.9 125.0us max 199.5us
+[redb adaptive-nodedupe s4-duplicates] mt-get x16: 160000 ops, 198275 ops/s aggregate, p50 5.5us p95 489.5us p99 1.13ms p99.9 2.71ms max 9.23ms
+[redb adaptive-nodedupe s4-duplicates] done
+[redb adaptive-nodedupe s5-high-entropy] start, dir bench-results/tmp\1790517570222-120656-redb-adaptive-nodedupe-s5
+[redb adaptive-nodedupe s5-high-entropy] load: 20000 records, 82.5 MB in 1.03s of commits -> 19337 rec/s, 79.7 MB/s; batch p50 46.13ms p95 74.68ms p99 108.94ms p99.9 108.94ms max 108.94ms
+[redb adaptive-nodedupe s5-high-entropy] space: user 82.48 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 84.96 MB
+[redb adaptive-nodedupe s5-high-entropy] put-durable: 200 ops p50 2.05ms p95 2.54ms p99 2.89ms p99.9 2.98ms max 2.98ms
+[redb adaptive-nodedupe s5-high-entropy] get: 10000 ops p50 6.9us p95 35.6us p99 89.1us p99.9 260.3us max 1.36ms (67602 ops/s)
+[redb adaptive-nodedupe s5-high-entropy] miss: 10000 ops p50 1.1us p95 2.2us p99 3.0us p99.9 21.3us max 104.4us
+[redb adaptive-nodedupe s5-high-entropy] range: 10000 ops p50 6.0us p95 30.8us p99 58.5us p99.9 112.0us max 278.3us
+[redb adaptive-nodedupe s5-high-entropy] mt-get x16: 160000 ops, 283829 ops/s aggregate, p50 4.3us p95 362.6us p99 749.0us p99.9 1.33ms max 3.08ms
+[redb adaptive-nodedupe s5-high-entropy] done
+[redb adaptive-nodedupe s6-compressed] start, dir bench-results/tmp\1790517570222-120656-redb-adaptive-nodedupe-s6
+[redb adaptive-nodedupe s6-compressed] load: 20000 records, 82.7 MB in 1.04s of commits -> 19158 rec/s, 79.3 MB/s; batch p50 47.15ms p95 76.36ms p99 113.37ms p99.9 113.37ms max 113.37ms
+[redb adaptive-nodedupe s6-compressed] space: user 82.74 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 85.22 MB
+[redb adaptive-nodedupe s6-compressed] put-durable: 200 ops p50 3.00ms p95 3.58ms p99 4.49ms p99.9 6.84ms max 6.84ms
+[redb adaptive-nodedupe s6-compressed] get: 10000 ops p50 9.3us p95 59.3us p99 249.6us p99.9 878.4us max 11.18ms (38307 ops/s)
+[redb adaptive-nodedupe s6-compressed] miss: 10000 ops p50 2.3us p95 3.9us p99 5.3us p99.9 36.5us max 75.7us
+[redb adaptive-nodedupe s6-compressed] range: 10000 ops p50 7.6us p95 48.1us p99 112.3us p99.9 253.6us max 1.48ms
+[redb adaptive-nodedupe s6-compressed] mt-get x16: 160000 ops, 185231 ops/s aggregate, p50 6.2us p95 514.1us p99 1.11ms p99.9 2.18ms max 8.11ms
+[redb adaptive-nodedupe s6-compressed] done
+[redb adaptive s1-repetitive] start, dir bench-results/tmp\1790517570222-120656-redb-adaptive-s1
+[redb adaptive s1-repetitive] load: 20000 records, 82.4 MB in 0.62s of commits -> 32364 rec/s, 133.4 MB/s; batch p50 31.82ms p95 37.60ms p99 42.49ms p99.9 42.49ms max 42.49ms
+[redb adaptive s1-repetitive] space: user 82.44 MB, files 8.43 MB apparent / 8.43 MB allocated, engine payload 2.93 MB
+[redb adaptive s1-repetitive] put-durable: 200 ops p50 2.45ms p95 3.33ms p99 3.49ms p99.9 21.14ms max 21.14ms
+[redb adaptive s1-repetitive] get: 10000 ops p50 4.5us p95 11.0us p99 40.1us p99.9 214.5us max 770.4us (151574 ops/s)
+[redb adaptive s1-repetitive] miss: 10000 ops p50 2.0us p95 3.1us p99 5.2us p99.9 33.2us max 147.7us
+[redb adaptive s1-repetitive] range: 10000 ops p50 4.0us p95 10.5us p99 44.0us p99.9 195.5us max 1.70ms
+[redb adaptive s1-repetitive] mt-get x16: 160000 ops, 1621174 ops/s aggregate, p50 3.8us p95 8.2us p99 24.4us p99.9 585.3us max 14.14ms
+[redb adaptive s1-repetitive] done
+[redb adaptive s2-sequences] start, dir bench-results/tmp\1790517570222-120656-redb-adaptive-s2
+[redb adaptive s2-sequences] load: 20000 records, 82.4 MB in 1.80s of commits -> 11126 rec/s, 45.9 MB/s; batch p50 68.80ms p95 209.55ms p99 213.73ms p99.9 213.73ms max 213.73ms
+[redb adaptive s2-sequences] space: user 82.42 MB, files 8.43 MB apparent / 8.43 MB allocated, engine payload 4.34 MB
+[redb adaptive s2-sequences] put-durable: 200 ops p50 3.32ms p95 4.32ms p99 6.16ms p99.9 8.41ms max 8.41ms
+[redb adaptive s2-sequences] get: 10000 ops p50 4.3us p95 7.8us p99 15.0us p99.9 39.1us max 97.0us (219856 ops/s)
+[redb adaptive s2-sequences] miss: 10000 ops p50 1.3us p95 2.0us p99 2.6us p99.9 29.1us max 90.3us
+[redb adaptive s2-sequences] range: 10000 ops p50 4.9us p95 9.4us p99 25.6us p99.9 62.5us max 133.3us
+[redb adaptive s2-sequences] mt-get x16: 160000 ops, 1396191 ops/s aggregate, p50 4.4us p95 9.6us p99 20.9us p99.9 549.1us max 13.24ms
+[redb adaptive s2-sequences] done
+[redb adaptive s3-chat-json] start, dir bench-results/tmp\1790517570222-120656-redb-adaptive-s3
+[redb adaptive s3-chat-json] load: 20000 records, 82.6 MB in 1.47s of commits -> 13599 rec/s, 56.2 MB/s; batch p50 66.64ms p95 109.94ms p99 114.97ms p99.9 114.97ms max 114.97ms
+[redb adaptive s3-chat-json] space: user 82.64 MB, files 67.38 MB apparent / 67.38 MB allocated, engine payload 41.45 MB
+[redb adaptive s3-chat-json] put-durable: 200 ops p50 3.01ms p95 3.73ms p99 4.08ms p99.9 6.34ms max 6.34ms
+[redb adaptive s3-chat-json] get: 10000 ops p50 5.9us p95 36.5us p99 121.6us p99.9 191.9us max 248.7us (68775 ops/s)
+[redb adaptive s3-chat-json] miss: 10000 ops p50 1.4us p95 2.8us p99 4.4us p99.9 11.4us max 70.4us
+[redb adaptive s3-chat-json] range: 10000 ops p50 5.7us p95 32.7us p99 47.0us p99.9 88.0us max 130.8us
+[redb adaptive s3-chat-json] latest50: 10000 scans p50 11.4us p95 59.9us p99 87.8us p99.9 123.0us max 160.2us (10.7 items/scan)
+[redb adaptive s3-chat-json] mt-get x16: 160000 ops, 721951 ops/s aggregate, p50 4.6us p95 32.8us p99 271.2us p99.9 1.45ms max 8.80ms
+[redb adaptive s3-chat-json] done
+[redb adaptive s4-duplicates] start, dir bench-results/tmp\1790517570222-120656-redb-adaptive-s4
+[redb adaptive s4-duplicates] load: 20000 records, 82.4 MB in 1.19s of commits -> 16839 rec/s, 69.4 MB/s; batch p50 51.65ms p95 98.41ms p99 107.87ms p99.9 107.87ms max 107.87ms
+[redb adaptive s4-duplicates] space: user 82.44 MB, files 134.75 MB apparent / 134.75 MB allocated, engine payload 60.43 MB
+[redb adaptive s4-duplicates] put-durable: 200 ops p50 2.39ms p95 3.14ms p99 3.54ms p99.9 3.70ms max 3.70ms
+[redb adaptive s4-duplicates] get: 10000 ops p50 4.6us p95 28.8us p99 78.7us p99.9 218.5us max 1.11ms (95035 ops/s)
+[redb adaptive s4-duplicates] miss: 10000 ops p50 1.3us p95 2.4us p99 3.0us p99.9 10.3us max 41.0us
+[redb adaptive s4-duplicates] range: 10000 ops p50 3.5us p95 23.5us p99 40.5us p99.9 93.8us max 121.4us
+[redb adaptive s4-duplicates] mt-get x16: 160000 ops, 724498 ops/s aggregate, p50 4.0us p95 18.6us p99 432.6us p99.9 1.48ms max 14.72ms
+[redb adaptive s4-duplicates] done
+[redb adaptive s5-high-entropy] start, dir bench-results/tmp\1790517570222-120656-redb-adaptive-s5
+[redb adaptive s5-high-entropy] load: 20000 records, 82.5 MB in 1.11s of commits -> 17999 rec/s, 74.2 MB/s; batch p50 49.25ms p95 71.97ms p99 109.47ms p99.9 109.47ms max 109.47ms
+[redb adaptive s5-high-entropy] space: user 82.48 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 85.84 MB
+[redb adaptive s5-high-entropy] put-durable: 200 ops p50 2.42ms p95 2.99ms p99 3.40ms p99.9 4.57ms max 4.57ms
+[redb adaptive s5-high-entropy] get: 10000 ops p50 6.2us p95 27.9us p99 70.4us p99.9 178.6us max 305.4us (85480 ops/s)
+[redb adaptive s5-high-entropy] miss: 10000 ops p50 1.9us p95 3.3us p99 5.2us p99.9 17.2us max 45.8us
+[redb adaptive s5-high-entropy] range: 10000 ops p50 6.4us p95 31.4us p99 60.3us p99.9 125.1us max 856.3us
+[redb adaptive s5-high-entropy] mt-get x16: 160000 ops, 223065 ops/s aggregate, p50 5.5us p95 424.3us p99 963.4us p99.9 2.31ms max 16.09ms
+[redb adaptive s5-high-entropy] done
+[redb adaptive s6-compressed] start, dir bench-results/tmp\1790517570222-120656-redb-adaptive-s6
+[redb adaptive s6-compressed] load: 20000 records, 82.7 MB in 1.39s of commits -> 14356 rec/s, 59.4 MB/s; batch p50 64.01ms p95 114.56ms p99 127.02ms p99.9 127.02ms max 127.02ms
+[redb adaptive s6-compressed] space: user 82.74 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 86.10 MB
+[redb adaptive s6-compressed] put-durable: 200 ops p50 2.94ms p95 3.58ms p99 4.51ms p99.9 7.62ms max 7.62ms
+[redb adaptive s6-compressed] get: 10000 ops p50 8.3us p95 39.2us p99 86.1us p99.9 279.1us max 512.0us (64311 ops/s)
+[redb adaptive s6-compressed] miss: 10000 ops p50 1.3us p95 2.3us p99 3.0us p99.9 7.1us max 48.1us
+[redb adaptive s6-compressed] range: 10000 ops p50 4.6us p95 25.7us p99 64.6us p99.9 181.7us max 819.1us
+[redb adaptive s6-compressed] mt-get x16: 160000 ops, 297316 ops/s aggregate, p50 4.0us p95 334.3us p99 716.0us p99.9 1.26ms max 3.04ms
+[redb adaptive s6-compressed] done
+
+== summary: backend redb, 20000 records x 4096 B, dist uniform, readers [16], seed 42 ==
+variant            scen load MB/s   put p99   get p50   get p99  miss p99   rng p99   lat p99  mt kop/s    mt p99  alloc MB    amp
+                                         ms        us        us        us        us        us                  us
+raw-backend        s1       100.3      2.89      11.1      78.4      38.1      31.9         -      61.1    1989.6    269.49   3.27
+raw-backend        s2        73.6      3.42      10.0      49.5      46.6      59.8         -      82.0    1149.5    269.49   3.27
+raw-backend        s3       110.1      2.19       7.9      31.2      37.4      34.2     371.4     111.0     711.9    269.49   3.26
+raw-backend        s4       139.1      2.14       7.6      27.3      23.4      29.7         -     111.7     699.3    269.49   3.27
+raw-backend        s5       141.6      2.18       9.2      35.6      27.6      32.6         -      97.2     842.4    269.49   3.27
+raw-backend        s6       125.1      2.18       7.8      25.4      27.3      29.0         -      88.6     966.1    269.49   3.26
+engine-raw         s1        80.0      4.19       6.5      66.6       2.5      95.1         -     288.8     737.0    269.49   3.27
+engine-raw         s2        94.3      3.74       5.4      63.1       3.2      50.1         -     301.6     716.5    269.49   3.27
+engine-raw         s3        85.7      6.53       5.0      54.2       3.4      58.8      97.0     276.2     781.3    269.49   3.26
+engine-raw         s4       123.0      2.42       4.1      42.3       1.8      46.8         -     295.7     728.7    269.49   3.27
+engine-raw         s5       100.5      3.85       6.7      83.5       2.6      55.7         -     311.0     697.6    269.49   3.27
+engine-raw         s6       102.0      3.27       5.0      53.7       3.6      73.1         -     306.0     710.1    269.49   3.26
+babel-pure         s1        92.1      3.01       6.1      58.1       3.5      58.8         -     289.0     737.1    269.49   3.27
+babel-pure         s2        99.8      3.53       5.8      58.2       3.1      57.7         -     296.2     721.1    269.49   3.27
+babel-pure         s3        96.5      2.71       3.9      43.6       1.8      34.4      92.1     272.7     804.9    269.49   3.26
+babel-pure         s4       108.6      3.16       6.1      66.0       3.0      49.7         -     309.4     707.5    269.49   3.27
+babel-pure         s5       119.2      2.57       4.2      34.2       2.3      46.4         -     345.1     640.9    269.49   3.27
+babel-pure         s6       109.8      3.12       5.6      62.3       2.4      60.2         -     274.5     780.4    269.49   3.26
+lz4                s1       327.4      2.75       3.8      17.5       2.0      11.8         -    1860.1      20.3      8.43   0.10
+lz4                s2       117.6      2.96       5.1      91.8       3.1      46.5         -     479.0     574.3    134.75   1.63
+lz4                s3        78.1      3.49       6.0      92.0       3.6      70.0      79.9     439.7     622.8    134.75   1.63
+lz4                s4        87.8      2.86       5.9      51.6       3.0      76.1         -     286.8     758.5    269.49   3.27
+lz4                s5       109.7      3.25       6.7      79.5       4.2     114.1         -     221.3     963.0    269.49   3.27
+lz4                s6        85.5      3.75       7.2      89.3       3.6      74.1         -     249.3     847.3    269.49   3.26
+zstd               s1       272.6      2.81       4.8      18.0       2.3      20.0         -    1580.1      19.1      8.43   0.10
+zstd               s2       152.4      4.26       6.7     112.4       3.6      62.7         -     803.8     258.5     67.38   0.82
+zstd               s3       109.4      4.00       5.6      98.5       2.7      96.0      69.9     925.6     231.4     67.38   0.82
+zstd               s4        93.0      3.59       7.0      58.5       4.5      46.9         -     246.6     857.6    269.49   3.27
+zstd               s5        90.0      3.18       6.7      77.3       4.5      68.5         -     224.7     936.0    269.49   3.27
+zstd               s6        73.6      4.81       6.5      96.5       3.5     141.4         -     208.0    1018.4    269.49   3.26
+adaptive-nodedupe  s1       225.0      4.03       4.9      20.1       3.3      14.3         -    1829.3      20.8      4.21   0.05
+adaptive-nodedupe  s2       181.0      4.58       5.9      36.2       3.2      23.6         -    1473.1      25.7      4.21   0.05
+adaptive-nodedupe  s3        69.5      4.25       6.3      65.6       2.3      46.2      87.2     642.9     276.6     67.38   0.82
+adaptive-nodedupe  s4        97.7     11.37       6.4      77.7       3.5      64.4         -     198.3    1126.7    269.49   3.27
+adaptive-nodedupe  s5        79.7      2.89       6.9      89.1       3.0      58.5         -     283.8     749.0    269.49   3.27
+adaptive-nodedupe  s6        79.3      4.49       9.3     249.6       5.3     112.3         -     185.2    1111.6    269.49   3.26
+adaptive           s1       133.4      3.49       4.5      40.1       5.2      44.0         -    1621.2      24.4      8.43   0.10
+adaptive           s2        45.9      6.16       4.3      15.0       2.6      25.6         -    1396.2      20.9      8.43   0.10
+adaptive           s3        56.2      4.08       5.9     121.6       4.4      47.0      87.8     722.0     271.2     67.38   0.82
+adaptive           s4        69.4      3.54       4.6      78.7       3.0      40.5         -     724.5     432.6    134.75   1.63
+adaptive           s5        74.2      3.40       6.2      70.4       5.2      60.3         -     223.1     963.4    269.49   3.27
+adaptive           s6        59.4      4.51       8.3      86.1       3.0      64.6         -     297.3     716.0    269.49   3.26
+343 JSON lines appended to bench-results/matrix-4k.jsonl

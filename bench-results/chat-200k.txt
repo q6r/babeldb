@@ -1,0 +1,114 @@
+   Compiling babeldb v0.1.0 (C:\Users\v4mpt\babeldb)
+    Finished `bench` profile [optimized + debuginfo] target(s) in 21.88s
+     Running benches\engine.rs (target\release\deps\engine-429a5c126f35b0fc.exe)
+babeldb engine bench run 1790517782855-21352 ({"os":"windows","os_version":"10.0.26200.9457","arch":"x86_64","cpu":"AMD Ryzen 7 5700","logical_cpus":16,"ram_total_bytes":34139103232,"ram_available_bytes_at_start":9750085632,"fs":{"root":"C:\\","file_system":"NTFS","cluster_bytes":4096,"total_bytes":999044411392,"free_bytes":94015205376},"rustc":"rustc 1.97.1 (8bab26f4f 2026-07-14)","profile":"release","features":[],"git_commit":"c6a92f5e35dcf0e59eeab7963cbac629e2f84204","git_dirty":true,"cargo_lock_blake3":"7b6d3953f12a7ff77913f89a80bbd0e454cd6d0ac2d700628f080d9a7a948087","datasets_version":1,"zstd":"1.5.7","bench_exe_bytes":2764800,"note":"KINGSTON SNV3S1000G NVMe; OS file cache warm; machine otherwise idle"})
+[redb raw-backend s3-chat-json] start, dir bench-results/tmp\1790517782855-21352-redb-raw-backend-s3
+[redb raw-backend s3-chat-json] load: 200000 records, 109.6 MB in 9.93s of commits -> 20133 rec/s, 11.0 MB/s; batch p50 45.79ms p95 88.57ms p99 130.46ms p99.9 159.52ms max 159.52ms
+[redb raw-backend s3-chat-json] space: user 109.60 MB, files 269.49 MB apparent / 269.49 MB allocated
+[redb raw-backend s3-chat-json] put-durable: 200 ops p50 1.79ms p95 2.13ms p99 2.63ms p99.9 3.50ms max 3.50ms
+[redb raw-backend s3-chat-json] get: 10000 ops p50 2.3us p95 14.3us p99 31.3us p99.9 106.8us max 240.7us (212353 ops/s)
+[redb raw-backend s3-chat-json] miss: 10000 ops p50 2.1us p95 14.4us p99 32.7us p99.9 108.0us max 232.1us
+[redb raw-backend s3-chat-json] range: 10000 ops p50 2.5us p95 15.2us p99 32.7us p99.9 136.8us max 160.9us
+[redb raw-backend s3-chat-json] latest50: 10000 scans p50 18.9us p95 35.6us p99 70.2us p99.9 222.0us max 363.9us (48.8 items/scan)
+[redb raw-backend s3-chat-json] mt-get x1: 10000 ops, 216279 ops/s aggregate, p50 2.2us p95 13.2us p99 27.2us p99.9 105.8us max 770.1us
+[redb raw-backend s3-chat-json] mt-get x4: 40000 ops, 286282 ops/s aggregate, p50 2.9us p95 75.9us p99 133.0us p99.9 279.7us max 2.01ms
+[redb raw-backend s3-chat-json] mt-get x8: 80000 ops, 370810 ops/s aggregate, p50 2.5us p95 140.2us p99 280.9us p99.9 500.5us max 1.23ms
+[redb raw-backend s3-chat-json] mt-get x16: 160000 ops, 218948 ops/s aggregate, p50 3.7us p95 303.7us p99 1.12ms p99.9 4.92ms max 32.70ms
+[redb raw-backend s3-chat-json] mixed 95-5 x16: 9261 ops/s; reads p50 7.1us p95 175.3us p99 2.02ms p99.9 2.89ms max 5.80ms | writes p50 33.48ms p95 52.84ms p99 82.82ms p99.9 123.73ms max 123.73ms
+[redb raw-backend s3-chat-json] done
+[redb engine-raw s3-chat-json] start, dir bench-results/tmp\1790517782855-21352-redb-engine-raw-s3
+[redb engine-raw s3-chat-json] load: 200000 records, 109.6 MB in 10.55s of commits -> 18963 rec/s, 10.4 MB/s; batch p50 56.89ms p95 78.77ms p99 120.85ms p99.9 138.32ms max 138.32ms
+[redb engine-raw s3-chat-json] space: user 109.60 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 126.60 MB
+[redb engine-raw s3-chat-json] put-durable: 200 ops p50 2.30ms p95 3.36ms p99 3.81ms p99.9 4.82ms max 4.82ms
+[redb engine-raw s3-chat-json] get: 10000 ops p50 4.2us p95 23.3us p99 49.2us p99.9 155.5us max 2.55ms (122356 ops/s)
+[redb engine-raw s3-chat-json] miss: 10000 ops p50 4.1us p95 27.7us p99 69.3us p99.9 234.9us max 739.8us
+[redb engine-raw s3-chat-json] range: 10000 ops p50 4.6us p95 27.5us p99 57.9us p99.9 159.5us max 667.2us
+[redb engine-raw s3-chat-json] latest50: 10000 scans p50 56.0us p95 87.4us p99 142.2us p99.9 249.5us max 1.31ms (48.8 items/scan)
+[redb engine-raw s3-chat-json] mt-get x1: 10000 ops, 154911 ops/s aggregate, p50 3.4us p95 18.1us p99 35.7us p99.9 133.0us max 206.8us
+[redb engine-raw s3-chat-json] mt-get x4: 40000 ops, 257130 ops/s aggregate, p50 3.9us p95 78.7us p99 149.5us p99.9 312.2us max 852.6us
+[redb engine-raw s3-chat-json] mt-get x8: 80000 ops, 320161 ops/s aggregate, p50 3.6us p95 158.1us p99 311.5us p99.9 573.2us max 2.96ms
+[redb engine-raw s3-chat-json] mt-get x16: 160000 ops, 380383 ops/s aggregate, p50 3.3us p95 292.4us p99 635.1us p99.9 1.22ms max 2.91ms
+[redb engine-raw s3-chat-json] mixed 95-5 x16: 9930 ops/s; reads p50 7.1us p95 228.8us p99 1.89ms p99.9 2.65ms max 3.95ms | writes p50 29.81ms p95 46.46ms p99 60.69ms p99.9 72.79ms max 72.79ms
+[redb engine-raw s3-chat-json] done
+[redb babel-pure s3-chat-json] start, dir bench-results/tmp\1790517782855-21352-redb-babel-pure-s3
+[redb babel-pure s3-chat-json] load: 200000 records, 109.6 MB in 8.05s of commits -> 24832 rec/s, 13.6 MB/s; batch p50 40.18ms p95 49.00ms p99 72.74ms p99.9 97.20ms max 97.20ms
+[redb babel-pure s3-chat-json] space: user 109.60 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 126.60 MB
+[redb babel-pure s3-chat-json] put-durable: 200 ops p50 1.66ms p95 2.09ms p99 2.48ms p99.9 2.91ms max 2.91ms
+[redb babel-pure s3-chat-json] get: 10000 ops p50 2.6us p95 13.0us p99 26.8us p99.9 108.2us max 765.2us (199903 ops/s)
+[redb babel-pure s3-chat-json] miss: 10000 ops p50 2.3us p95 14.0us p99 30.7us p99.9 106.8us max 203.2us
+[redb babel-pure s3-chat-json] range: 10000 ops p50 3.0us p95 14.7us p99 30.9us p99.9 130.6us max 201.0us
+[redb babel-pure s3-chat-json] latest50: 10000 scans p50 55.0us p95 78.9us p99 123.0us p99.9 248.6us max 644.4us (48.8 items/scan)
+[redb babel-pure s3-chat-json] mt-get x1: 10000 ops, 147534 ops/s aggregate, p50 3.6us p95 18.2us p99 37.0us p99.9 145.7us max 299.9us
+[redb babel-pure s3-chat-json] mt-get x4: 40000 ops, 203971 ops/s aggregate, p50 4.3us p95 86.4us p99 204.7us p99.9 885.5us max 4.25ms
+[redb babel-pure s3-chat-json] mt-get x8: 80000 ops, 280908 ops/s aggregate, p50 4.0us p95 175.1us p99 349.2us p99.9 673.0us max 2.62ms
+[redb babel-pure s3-chat-json] mt-get x16: 160000 ops, 327747 ops/s aggregate, p50 4.0us p95 329.1us p99 739.6us p99.9 1.45ms max 4.17ms
+[redb babel-pure s3-chat-json] mixed 95-5 x16: 9325 ops/s; reads p50 7.6us p95 183.9us p99 2.05ms p99.9 3.23ms max 10.86ms | writes p50 29.64ms p95 47.72ms p99 78.43ms p99.9 82.90ms max 82.90ms
+[redb babel-pure s3-chat-json] done
+[redb lz4 s3-chat-json] start, dir bench-results/tmp\1790517782855-21352-redb-lz4-s3
+[redb lz4 s3-chat-json] load: 200000 records, 109.6 MB in 10.62s of commits -> 18840 rec/s, 10.3 MB/s; batch p50 48.60ms p95 98.70ms p99 136.69ms p99.9 164.00ms max 164.00ms
+[redb lz4 s3-chat-json] space: user 109.60 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 121.29 MB
+[redb lz4 s3-chat-json] put-durable: 200 ops p50 3.10ms p95 9.20ms p99 16.61ms p99.9 19.61ms max 19.61ms
+[redb lz4 s3-chat-json] get: 10000 ops p50 6.3us p95 36.5us p99 155.5us p99.9 711.1us max 3.46ms (67685 ops/s)
+[redb lz4 s3-chat-json] miss: 10000 ops p50 4.8us p95 39.0us p99 154.0us p99.9 523.8us max 2.14ms
+[redb lz4 s3-chat-json] range: 10000 ops p50 6.0us p95 34.0us p99 93.6us p99.9 624.8us max 2.47ms
+[redb lz4 s3-chat-json] latest50: 10000 scans p50 87.6us p95 158.9us p99 382.9us p99.9 2.87ms max 21.64ms (48.8 items/scan)
+[redb lz4 s3-chat-json] mt-get x1: 10000 ops, 105496 ops/s aggregate, p50 4.9us p95 26.3us p99 65.2us p99.9 212.9us max 515.2us
+[redb lz4 s3-chat-json] mt-get x4: 40000 ops, 211712 ops/s aggregate, p50 4.5us p95 90.2us p99 173.8us p99.9 522.9us max 3.35ms
+[redb lz4 s3-chat-json] mt-get x8: 80000 ops, 214208 ops/s aggregate, p50 5.0us p95 212.5us p99 450.1us p99.9 1.20ms max 28.57ms
+[redb lz4 s3-chat-json] mt-get x16: 160000 ops, 311526 ops/s aggregate, p50 4.2us p95 344.0us p99 775.0us p99.9 1.51ms max 6.27ms
+[redb lz4 s3-chat-json] mixed 95-5 x16: 9376 ops/s; reads p50 8.2us p95 189.5us p99 1.99ms p99.9 2.66ms max 3.72ms | writes p50 33.08ms p95 41.67ms p99 60.25ms p99.9 71.25ms max 71.25ms
+[redb lz4 s3-chat-json] done
+[redb zstd s3-chat-json] start, dir bench-results/tmp\1790517782855-21352-redb-zstd-s3
+[redb zstd s3-chat-json] load: 200000 records, 109.6 MB in 9.10s of commits -> 21981 rec/s, 12.0 MB/s; batch p50 43.78ms p95 68.77ms p99 134.78ms p99.9 181.03ms max 181.03ms
+[redb zstd s3-chat-json] space: user 109.60 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 97.39 MB
+[redb zstd s3-chat-json] put-durable: 200 ops p50 1.73ms p95 2.28ms p99 2.60ms p99.9 3.19ms max 3.19ms
+[redb zstd s3-chat-json] get: 10000 ops p50 5.6us p95 19.8us p99 43.1us p99.9 154.6us max 268.6us (117418 ops/s)
+[redb zstd s3-chat-json] miss: 10000 ops p50 2.2us p95 13.1us p99 25.8us p99.9 53.3us max 184.4us
+[redb zstd s3-chat-json] range: 10000 ops p50 5.2us p95 19.3us p99 39.1us p99.9 158.9us max 526.5us
+[redb zstd s3-chat-json] latest50: 10000 scans p50 160.8us p95 263.6us p99 438.2us p99.9 1.51ms max 27.37ms (48.8 items/scan)
+[redb zstd s3-chat-json] mt-get x1: 10000 ops, 100763 ops/s aggregate, p50 6.0us p95 24.3us p99 60.1us p99.9 193.8us max 842.0us
+[redb zstd s3-chat-json] mt-get x4: 40000 ops, 225243 ops/s aggregate, p50 6.9us p95 69.4us p99 141.9us p99.9 504.4us max 2.09ms
+[redb zstd s3-chat-json] mt-get x8: 80000 ops, 207901 ops/s aggregate, p50 7.3us p95 193.7us p99 518.0us p99.9 1.70ms max 6.21ms
+[redb zstd s3-chat-json] mt-get x16: 160000 ops, 258602 ops/s aggregate, p50 7.3us p95 375.9us p99 984.3us p99.9 2.32ms max 12.74ms
+[redb zstd s3-chat-json] mixed 95-5 x16: 6634 ops/s; reads p50 12.1us p95 220.1us p99 2.30ms p99.9 5.26ms max 18.87ms | writes p50 39.14ms p95 57.29ms p99 104.58ms p99.9 261.05ms max 261.05ms
+[redb zstd s3-chat-json] done
+[redb adaptive-nodedupe s3-chat-json] start, dir bench-results/tmp\1790517782855-21352-redb-adaptive-nodedupe-s3
+[redb adaptive-nodedupe s3-chat-json] load: 200000 records, 109.6 MB in 13.39s of commits -> 14933 rec/s, 8.2 MB/s; batch p50 60.88ms p95 108.65ms p99 147.47ms p99.9 350.54ms max 350.54ms
+[redb adaptive-nodedupe s3-chat-json] space: user 109.60 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 97.39 MB
+[redb adaptive-nodedupe s3-chat-json] put-durable: 200 ops p50 2.36ms p95 3.28ms p99 3.73ms p99.9 4.06ms max 4.06ms
+[redb adaptive-nodedupe s3-chat-json] get: 10000 ops p50 5.8us p95 23.7us p99 48.1us p99.9 93.3us max 263.1us (112281 ops/s)
+[redb adaptive-nodedupe s3-chat-json] miss: 10000 ops p50 4.5us p95 31.2us p99 78.5us p99.9 310.0us max 1.31ms
+[redb adaptive-nodedupe s3-chat-json] range: 10000 ops p50 9.5us p95 56.7us p99 222.7us p99.9 1.93ms max 26.73ms
+[redb adaptive-nodedupe s3-chat-json] latest50: 10000 scans p50 211.6us p95 373.6us p99 627.3us p99.9 1.39ms max 4.05ms (48.8 items/scan)
+[redb adaptive-nodedupe s3-chat-json] mt-get x1: 10000 ops, 92094 ops/s aggregate, p50 6.9us p95 28.1us p99 63.2us p99.9 169.7us max 415.1us
+[redb adaptive-nodedupe s3-chat-json] mt-get x4: 40000 ops, 161080 ops/s aggregate, p50 7.8us p95 91.3us p99 228.9us p99.9 822.5us max 7.27ms
+[redb adaptive-nodedupe s3-chat-json] mt-get x8: 80000 ops, 165249 ops/s aggregate, p50 7.8us p95 170.9us p99 658.8us p99.9 2.69ms max 14.55ms
+[redb adaptive-nodedupe s3-chat-json] mt-get x16: 160000 ops, 255014 ops/s aggregate, p50 7.2us p95 321.6us p99 998.3us p99.9 2.89ms max 43.33ms
+[redb adaptive-nodedupe s3-chat-json] mixed 95-5 x16: 6670 ops/s; reads p50 11.9us p95 189.6us p99 2.38ms p99.9 5.05ms max 27.93ms | writes p50 40.55ms p95 72.39ms p99 120.85ms p99.9 155.53ms max 155.53ms
+[redb adaptive-nodedupe s3-chat-json] done
+[redb adaptive s3-chat-json] start, dir bench-results/tmp\1790517782855-21352-redb-adaptive-s3
+[redb adaptive s3-chat-json] load: 200000 records, 109.6 MB in 15.79s of commits -> 12667 rec/s, 6.9 MB/s; batch p50 62.74ms p95 180.50ms p99 335.55ms p99.9 425.95ms max 425.95ms
+[redb adaptive s3-chat-json] space: user 109.60 MB, files 269.49 MB apparent / 269.49 MB allocated, engine payload 97.39 MB
+[redb adaptive s3-chat-json] put-durable: 200 ops p50 2.20ms p95 3.31ms p99 4.99ms p99.9 10.31ms max 10.31ms
+[redb adaptive s3-chat-json] get: 10000 ops p50 7.1us p95 29.6us p99 81.2us p99.9 300.7us max 793.9us (83889 ops/s)
+[redb adaptive s3-chat-json] miss: 10000 ops p50 2.9us p95 16.8us p99 35.2us p99.9 65.1us max 94.0us
+[redb adaptive s3-chat-json] range: 10000 ops p50 7.0us p95 29.7us p99 80.3us p99.9 234.6us max 1.13ms
+[redb adaptive s3-chat-json] latest50: 10000 scans p50 205.3us p95 451.5us p99 1.10ms p99.9 4.89ms max 13.09ms (48.8 items/scan)
+[redb adaptive s3-chat-json] mt-get x1: 10000 ops, 79449 ops/s aggregate, p50 7.5us p95 31.9us p99 75.9us p99.9 226.3us max 3.12ms
+[redb adaptive s3-chat-json] mt-get x4: 40000 ops, 196562 ops/s aggregate, p50 7.2us p95 81.4us p99 194.7us p99.9 743.2us max 1.86ms
+[redb adaptive s3-chat-json] mt-get x8: 80000 ops, 233877 ops/s aggregate, p50 7.2us p95 173.4us p99 443.1us p99.9 1.42ms max 8.07ms
+[redb adaptive s3-chat-json] mt-get x16: 160000 ops, 311941 ops/s aggregate, p50 6.9us p95 335.7us p99 856.1us p99.9 1.74ms max 5.87ms
+[redb adaptive s3-chat-json] mixed 95-5 x16: 9205 ops/s; reads p50 10.8us p95 191.3us p99 1.97ms p99.9 2.75ms max 3.75ms | writes p50 33.00ms p95 39.48ms p99 41.79ms p99.9 43.73ms max 43.73ms
+[redb adaptive s3-chat-json] done
+
+== summary: backend redb, 200000 records x 512 B, dist latest, readers [1, 4, 8, 16], seed 42 ==
+variant            scen load MB/s   put p99   get p50   get p99  miss p99   rng p99   lat p99  mt kop/s    mt p99  alloc MB    amp
+                                         ms        us        us        us        us        us                  us
+raw-backend        s3        11.0      2.63       2.3      31.3      32.7      32.7      70.2     218.9    1121.9    269.49   2.46
+engine-raw         s3        10.4      3.81       4.2      49.2      69.3      57.9     142.2     380.4     635.1    269.49   2.46
+babel-pure         s3        13.6      2.48       2.6      26.8      30.7      30.9     123.0     327.7     739.6    269.49   2.46
+lz4                s3        10.3     16.61       6.3     155.5     154.0      93.6     382.9     311.5     775.0    269.49   2.46
+zstd               s3        12.0      2.60       5.6      43.1      25.8      39.1     438.2     258.6     984.3    269.49   2.46
+adaptive-nodedupe  s3         8.2      3.73       5.8      48.1      78.5     222.7     627.3     255.0     998.3    269.49   2.46
+adaptive           s3         6.9      4.99       7.1      81.2      35.2      80.3    1097.3     311.9     856.1    269.49   2.46
+91 JSON lines appended to bench-results/chat-200k.jsonl

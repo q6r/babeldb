@@ -1,11 +1,9 @@
 # Benchmarks do babeldb — método, ambiente e reprodução
 
-> **Estado (27/09/2026):** método, datasets e harness implementados e testados; o motor
-> (`Db`), o `RedbStore` e o `HeedStore` ainda eram *stubs* quando este documento foi escrito.
-> **Nenhum número de desempenho do babeldb foi medido.** A seção 9 está marcada
-> "a preencher com resultados medidos". Os únicos tempos já obtidos vieram de execuções de
-> fumaça do harness sobre o `MemStore` (armazenamento de teste em memória) e **não são
-> resultados**: servem apenas para verificar o harness.
+> **Estado (27/09/2026, tarde):** motor integrado; a seção 9 traz os primeiros resultados
+> medidos (1 repetição por combinação, commit `c6a92f5`, cache de arquivos do Windows quente,
+> máquina sem outras cargas). São medições de uma execução, não medianas de repetições: use
+> `scripts/bench-matrix.ps1 -Reps 5` para intervalos.
 
 Base: especificação §11 (benchmark) e §4 (critérios de comparação). Código:
 `src/datasets.rs` (cenários), `src/sys.rs` (métricas do SO), `benches/engine.rs` (harness),
@@ -269,34 +267,65 @@ não comparar execuções de máquinas, commits ou `Cargo.lock` diferentes (todo
 - `scripts/summarize.ps1` agrupa por backend/variante/cenário/fase/threads e mostra
   mediana (mín..máx) entre repetições; `-Csv` exporta em formato longo.
 
-## 9. Resultados — a preencher com resultados medidos
+## 9. Resultados medidos
 
-> Nenhum resultado foi medido até aqui. Preencher somente com números produzidos pelos
-> comandos da §7, indicando `run_id`, commit, `--note` e número de repetições.
+Ambiente da §6; 1 repetição; commit `c6a92f5`; backend redb; `--note "KINGSTON SNV3S1000G
+NVMe; OS file cache warm; machine otherwise idle"`. Saídas brutas: `bench-results/matrix-4k.*`
+e `bench-results/chat-200k.*`.
 
-### 9.1 Espaço (alocado ÷ bytes do usuário), `value_size` = 1 KiB
+### 9.1 Espaço — payload do motor (MB), 20 000 registros × 4 KiB (`--value-size 4k --records 20k`)
 
-| variante | S1 | S2 | S3 | S4 | S5 | S6 |
+Bytes do usuário ≈ 82,4–82,7 MB por cenário. "Payload" = chaves + valores gravados pelo motor
+(manifestos, envelopes de 64 B, índices, refcounts, meta), antes das páginas do redb.
+
+| variante | S1 repetitivo | S2 sequências | S3 chat JSON | S4 duplicatas | S5 alta entropia | S6 comprimido |
 |---|---|---|---|---|---|---|
-| raw-backend | — | — | — | — | — | — |
-| engine-raw | — | — | — | — | — | — |
-| babel-pure | — | — | — | — | — | — |
-| lz4 | — | — | — | — | — | — |
-| zstd | — | — | — | — | — | — |
-| adaptive-nodedupe | — | — | — | — | — | — |
-| adaptive | — | — | — | — | — | — |
+| engine-raw | 84,92 | 84,90 | 85,12 | 84,92 | 84,96 | 85,22 |
+| **babel-pure** | 84,92 | 84,90 | 85,12 | 84,92 | 84,96 | 85,22 |
+| lz4 | 3,87 | 59,34 | 61,52 | 84,92 | 84,96 | 85,22 |
+| zstd | 3,70 | 31,12 | 40,57 | 84,92 | 84,96 | 85,22 |
+| adaptive-nodedupe | 3,42 | 3,46 | 40,57 | 84,92 | 84,96 | 85,22 |
+| **adaptive** | 2,93 | 4,34 | 41,45 | **60,43** | 85,84 | 86,10 |
 
-### 9.2 Latência (p50 / p99) e vazão
+- `BabelPure` ocupa exatamente o mesmo que `engine-raw` em todos os cenários: a hipótese da
+  §11 (seed do mesmo tamanho + envelope) se confirmou; nenhuma economia.
+- `Adaptive` economiza só onde há estrutura: ~28× (S1), ~24× (S2, receita aritmética sem
+  dedupe), ~2× (S3, zstd sem dicionário), ~27 % (S4, dedupe de 30 % de duplicatas); em S5/S6
+  o índice de dedupe custa ~1 % a mais.
+- **Arquivo em disco**: o redb cresce em regiões de potência de 2 (4,21 → 8,43 → 67,38 →
+  134,75 → 269,49 MB); sem `compact()`, o arquivo fica bem acima do payload (ex.: 269,49 MB
+  para 85 MB em S5). Tratado como gargalo de espaço a otimizar.
 
-| variante | cenário | load MB/s | put durável p99 | get p50/p99 | latest-50 p99 (S3) | mt-get ops/s (T) |
+### 9.2 Carga de chat tipo Discord — 200 000 mensagens × 512 B (S3), leituras `--dist latest`
+
+`cargo bench --bench engine -- --scenario s3 --records 200k --value-size 512 --dist latest
+--readers 1,4,8,16 --mix 95-5`. Latências por operação; durável = commit `Immediate`.
+
+| variante | carga (rec/s) | put durável p50 / p99 | get p50 / p99 | latest-50 p50 / p99 | mt-get x16 (ops/s) | mixed 95/5 x16: escrita p50 |
 |---|---|---|---|---|---|---|
-| — | — | — | — | — | — | — |
+| raw-backend (redb puro) | 20133 | 1,79 ms / 2,63 ms | 2,3 µs / 31,3 µs | 18,9 µs / 70,2 µs | 218948 | 33,48 ms |
+| engine-raw | 18963 | 2,30 ms / 3,81 ms | 4,2 µs / 49,2 µs | 56,0 µs / 142,2 µs | 380383 | 29,81 ms |
+| babel-pure | 24832 | 1,66 ms / 2,48 ms | 2,6 µs / 26,8 µs | 55,0 µs / 123,0 µs | 327747 | 29,64 ms |
+| lz4 | 18840 | 3,10 ms / 16,61 ms | 6,3 µs / 155,5 µs | 87,6 µs / 382,9 µs | 311526 | 33,08 ms |
+| zstd | 21981 | 1,73 ms / 2,60 ms | 5,6 µs / 43,1 µs | 160,8 µs / 438,2 µs | 258602 | 39,14 ms |
+| adaptive-nodedupe | 14933 | 2,36 ms / 3,73 ms | 5,8 µs / 48,1 µs | 211,6 µs / 627,3 µs | 255014 | 40,55 ms |
+| adaptive | 12667 | 2,20 ms / 4,99 ms | 7,1 µs / 81,2 µs | 205,3 µs / 1,10 ms | 311941 | 33,00 ms |
 
-### 9.3 Metas da §12 (negociáveis)
+Leitura dos números (1 repetição; diferenças pequenas entre variantes estão dentro do ruído):
+- O commit durável custa ~1,7–2,4 ms (p50) — é o `FlushFileBuffers` do disco; domina toda
+  escrita isolada.
+- O formato do motor acrescenta ~2 µs por `get` sobre o redb puro; zstd sem dicionário
+  acrescenta mais ~1–3 µs por valor e pesa no `latest-50` (50 decodificações).
+- Com 16 threads fazendo escritas duráveis diretas (sem group commit), cada escrita espera
+  ~30 ms: todas disputam o único escritor e cada uma paga seu fsync. É o caso que o
+  `GroupCommitter` (`src/scale`) resolve; ver a comparação com PostgreSQL/MongoDB.
 
-- ≥ 20 % menos bytes alocados que `engine-raw` com ≤ 10 % de regressão de p99: — (a medir;
-  se não for atingido, publicar a curva espaço × latência).
-- BabelPure ≥ Raw em bytes (hipótese da §11): — (a medir).
+### 9.3 Metas da §12
+
+- ≥ 20 % menos bytes que `engine-raw` com ≤ 10 % de regressão de p99: atingida em payload
+  para S1, S2, S3 e S4; **não** para S5/S6 (sem estrutura). Em p99 de leitura, o zstd custa
+  mais que 10 % — a curva espaço × latência está na tabela 9.2.
+- BabelPure ≥ Raw em bytes: confirmada (igual ao `engine-raw` + nada de ganho).
 
 ## 10. Limitações conhecidas
 

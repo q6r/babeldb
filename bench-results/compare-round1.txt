@@ -1,0 +1,96 @@
+    Finished `bench` profile [optimized + debuginfo] target(s) in 1.10s
+     Running benches\compare.rs (target\release\deps\compare-48490df885a85ad6.exe)
+== babel-raw (100000 records x 512 B, durable)
+[babel-raw] load       100000 records in 6.19s of batches -> 16168 rec/s
+[babel-raw] load-batch x1       100 ops           16 ops/s  p50   51.19ms p95  113.86ms p99  169.05ms max  263.23ms
+[babel-raw] space          134.75 MB  (redb file allocated (apparent 134.75 MB, engine payload 61.30 MB))
+[babel-raw] put        x1       300 ops          502 ops/s  p50    1.94ms p95    2.54ms p99    3.17ms max    4.17ms
+[babel-raw] put-mt     x1       200 ops          498 ops/s  p50    1.97ms p95    2.55ms p99    3.10ms max    3.27ms
+[babel-raw] put-mt     x4       800 ops          810 ops/s  p50    4.90ms p95    6.30ms p99    7.85ms max    8.18ms
+[babel-raw] put-mt     x16     3200 ops         2537 ops/s  p50    5.05ms p95   10.57ms p99   13.55ms max   15.67ms
+[babel-raw] put-mt     x64    12800 ops         5067 ops/s  p50   11.38ms p95   22.17ms p99   25.94ms max   38.58ms
+[babel-raw] get        x1     20000 ops       117898 ops/s  p50     5.2us p95    20.7us p99    38.6us max    1.31ms
+[babel-raw] get-mt     x4     40000 ops       199560 ops/s  p50     4.2us p95    73.8us p99   120.4us max    2.48ms
+[babel-raw] get-mt     x16   160000 ops        75212 ops/s  p50    31.7us p95   729.2us p99    1.37ms max  134.27ms
+[babel-raw] latest     x1      5000 ops        11915 ops/s  p50    68.3us p95   177.5us p99   320.9us max    1.77ms
+[babel-raw] latest-mt  x4     10000 ops        49291 ops/s  p50    69.2us p95   137.6us p99   243.1us max    1.61ms
+[babel-raw] latest-mt  x16    40000 ops       107443 ops/s  p50    70.7us p95   335.6us p99   835.7us max   28.31ms
+== babel-adaptive (100000 records x 512 B, durable)
+[babel-adaptive] load       100000 records in 6.74s of batches -> 14840 rec/s
+[babel-adaptive] load-batch x1       100 ops           15 ops/s  p50   64.90ms p95  123.33ms p99  143.20ms max  161.12ms
+[babel-adaptive] space          134.75 MB  (redb file allocated (apparent 134.75 MB, engine payload 46.69 MB))
+[babel-adaptive] put        x1       300 ops          434 ops/s  p50    2.27ms p95    2.84ms p99    3.36ms max    3.76ms
+[babel-adaptive] put-mt     x1       200 ops          428 ops/s  p50    2.27ms p95    3.00ms p99    4.06ms max    4.62ms
+[babel-adaptive] put-mt     x4       800 ops          749 ops/s  p50    5.29ms p95    6.70ms p99    7.25ms max    8.18ms
+[babel-adaptive] put-mt     x16     3200 ops         2828 ops/s  p50    4.45ms p95   10.63ms p99   12.82ms max   15.13ms
+[babel-adaptive] put-mt     x64    12800 ops         4364 ops/s  p50   12.55ms p95   25.91ms p99   34.90ms max   42.78ms
+[babel-adaptive] get        x1     20000 ops        70737 ops/s  p50     8.0us p95    32.7us p99    73.9us max    2.23ms
+[babel-adaptive] get-mt     x4     40000 ops       183217 ops/s  p50     7.8us p95    78.0us p99   171.4us max    3.86ms
+[babel-adaptive] get-mt     x16   160000 ops        85274 ops/s  p50    55.9us p95   666.6us p99    1.12ms max    5.03ms
+[babel-adaptive] latest     x1      5000 ops         5234 ops/s  p50   179.1us p95   285.8us p99   377.5us max    1.32ms
+[babel-adaptive] latest-mt  x4     10000 ops        17958 ops/s  p50   210.7us p95   343.6us p99   566.5us max    3.90ms
+[babel-adaptive] latest-mt  x16    40000 ops        37535 ops/s  p50   205.6us p95   468.8us p99    1.87ms max   90.86ms
+== babel-tcp (100000 records x 512 B, durable)
+[babel-tcp] load       100000 records in 7.15s of batches -> 13988 rec/s
+[babel-tcp] load-batch x1       100 ops           14 ops/s  p50   68.08ms p95  123.40ms p99  169.90ms max  247.20ms
+[babel-tcp] space          134.75 MB  (redb file allocated (apparent 134.75 MB, engine payload 46.69 MB))
+[babel-tcp] put        x1       300 ops          313 ops/s  p50    3.11ms p95    3.95ms p99    4.94ms max    7.61ms
+[babel-tcp] put-mt     x1       200 ops          276 ops/s  p50    3.42ms p95    5.12ms p99    6.47ms max    7.19ms
+[babel-tcp] put-mt     x4       800 ops          324 ops/s  p50   12.00ms p95   15.37ms p99   18.69ms max   23.29ms
+[babel-tcp] put-mt     x16     3200 ops          332 ops/s  p50   45.55ms p95   83.89ms p99  133.28ms max  225.78ms
+[babel-tcp] put-mt     x64    12800 ops          380 ops/s  p50  161.45ms p95  242.50ms p99  424.77ms max 1173.12ms
+[babel-tcp] get        x1     20000 ops        14875 ops/s  p50    63.1us p95   106.7us p99   134.1us max   732.3us
+[babel-tcp] get-mt     x4     40000 ops        48163 ops/s  p50    72.2us p95   123.4us p99   186.0us max    3.19ms
+[babel-tcp] get-mt     x16   160000 ops        40898 ops/s  p50   306.4us p95   981.5us p99    1.41ms max    4.83ms
+[babel-tcp] latest     x1      5000 ops         3510 ops/s  p50   269.1us p95   400.5us p99   501.9us max    1.51ms
+[babel-tcp] latest-mt  x4     10000 ops        12590 ops/s  p50   314.9us p95   416.7us p99   520.0us max    1.27ms
+[babel-tcp] latest-mt  x16    40000 ops        28223 ops/s  p50   421.8us p95   975.4us p99    1.92ms max   38.55ms
+== postgres (100000 records x 512 B, durable)
+[postgres] load       100000 records in 1.47s of batches -> 67847 rec/s
+[postgres] load-batch x1       100 ops           68 ops/s  p50   12.88ms p95   23.47ms p99   59.59ms max   75.21ms
+[postgres] space           62.62 MB  (pg_total_relation_size(messages): heap + TOAST + primary key index (WAL excluded))
+[postgres] put        x1       300 ops         3988 ops/s  p50   239.3us p95   347.8us p99   458.9us max    1.07ms
+[postgres] put-mt     x1       200 ops         3198 ops/s  p50   295.5us p95   461.0us p99   615.3us max   920.5us
+[postgres] put-mt     x4       800 ops        10102 ops/s  p50   362.2us p95   617.3us p99    1.01ms max    1.81ms
+[postgres] put-mt     x16     3200 ops        23007 ops/s  p50   571.0us p95    1.11ms p99    1.98ms max    4.58ms
+[postgres] put-mt     x64    12800 ops        24838 ops/s  p50    1.15ms p95    3.66ms p99    7.67ms max  210.29ms
+[postgres] get        x1     20000 ops         7287 ops/s  p50   133.6us p95   197.9us p99   311.5us max    1.49ms
+[postgres] get-mt     x4     40000 ops        26674 ops/s  p50   140.6us p95   206.2us p99   315.9us max    1.70ms
+[postgres] get-mt     x16   160000 ops        63751 ops/s  p50   175.3us p95   268.6us p99   372.7us max   52.36ms
+[postgres] latest     x1      5000 ops         2745 ops/s  p50   338.8us p95   593.8us p99   874.9us max    3.13ms
+[postgres] latest-mt  x4     10000 ops         9842 ops/s  p50   370.9us p95   595.1us p99   871.7us max    3.39ms
+[postgres] latest-mt  x16    40000 ops        23412 ops/s  p50   421.3us p95   714.5us p99    1.79ms max   57.31ms
+== mongo (100000 records x 512 B, durable)
+[mongo] load       100000 records in 3.15s of batches -> 31742 rec/s
+[mongo] load-batch x1       100 ops           32 ops/s  p50   26.45ms p95   57.68ms p99   71.67ms max  131.71ms
+[mongo] space           32.10 MB  (dbStats storageSize 30072832 + indexSize 2027520 (WiredTiger, default snappy block compression; journal excluded))
+[mongo] put        x1       300 ops          370 ops/s  p50    2.51ms p95    3.62ms p99    7.56ms max    9.93ms
+[mongo] put-mt     x1       200 ops          408 ops/s  p50    2.39ms p95    2.81ms p99    3.50ms max    4.49ms
+[mongo] put-mt     x4       800 ops         1321 ops/s  p50    2.70ms p95    4.34ms p99    7.04ms max   10.12ms
+[mongo] put-mt     x16     3200 ops         2806 ops/s  p50    3.34ms p95    9.51ms p99   20.54ms max   94.02ms
+[mongo] put-mt     x64    12800 ops         8982 ops/s  p50    5.04ms p95   14.28ms p99   28.59ms max   50.94ms
+[mongo] get        x1     20000 ops         2822 ops/s  p50   300.5us p95   534.1us p99    1.33ms max   30.60ms
+[mongo] get-mt     x4     40000 ops        13294 ops/s  p50   269.8us p95   446.6us p99   776.9us max   11.91ms
+[mongo] get-mt     x16   160000 ops        21232 ops/s  p50   446.3us p95    2.16ms p99    4.32ms max   33.48ms
+[mongo] latest     x1      5000 ops          404 ops/s  p50    1.93ms p95    6.00ms p99   12.91ms max   74.33ms
+[mongo] latest-mt  x4     10000 ops         1204 ops/s  p50    1.80ms p95    8.43ms p99   21.90ms max  127.46ms
+[mongo] latest-mt  x16    40000 ops         3156 ops/s  p50    1.49ms p95   19.31ms p99   62.89ms max  275.63ms
+
+== summary (ops/s; p99)
+load-batch x1   babel-raw: 16/s p99 169.05ms | babel-adaptive: 15/s p99 143.20ms | babel-tcp: 14/s p99 169.90ms | postgres: 68/s p99 59.59ms | mongo: 32/s p99 71.67ms
+put        x1   babel-raw: 502/s p99 3.17ms | babel-adaptive: 434/s p99 3.36ms | babel-tcp: 313/s p99 4.94ms | postgres: 3988/s p99 458.9us | mongo: 370/s p99 7.56ms
+put-mt     x1   babel-raw: 498/s p99 3.10ms | babel-adaptive: 428/s p99 4.06ms | babel-tcp: 276/s p99 6.47ms | postgres: 3198/s p99 615.3us | mongo: 408/s p99 3.50ms
+put-mt     x4   babel-raw: 810/s p99 7.85ms | babel-adaptive: 749/s p99 7.25ms | babel-tcp: 324/s p99 18.69ms | postgres: 10102/s p99 1.01ms | mongo: 1321/s p99 7.04ms
+put-mt     x16  babel-raw: 2537/s p99 13.55ms | babel-adaptive: 2828/s p99 12.82ms | babel-tcp: 332/s p99 133.28ms | postgres: 23007/s p99 1.98ms | mongo: 2806/s p99 20.54ms
+put-mt     x64  babel-raw: 5067/s p99 25.94ms | babel-adaptive: 4364/s p99 34.90ms | babel-tcp: 380/s p99 424.77ms | postgres: 24838/s p99 7.67ms | mongo: 8982/s p99 28.59ms
+get        x1   babel-raw: 117898/s p99 38.6us | babel-adaptive: 70737/s p99 73.9us | babel-tcp: 14875/s p99 134.1us | postgres: 7287/s p99 311.5us | mongo: 2822/s p99 1.33ms
+get-mt     x4   babel-raw: 199560/s p99 120.4us | babel-adaptive: 183217/s p99 171.4us | babel-tcp: 48163/s p99 186.0us | postgres: 26674/s p99 315.9us | mongo: 13294/s p99 776.9us
+get-mt     x16  babel-raw: 75212/s p99 1.37ms | babel-adaptive: 85274/s p99 1.12ms | babel-tcp: 40898/s p99 1.41ms | postgres: 63751/s p99 372.7us | mongo: 21232/s p99 4.32ms
+latest     x1   babel-raw: 11915/s p99 320.9us | babel-adaptive: 5234/s p99 377.5us | babel-tcp: 3510/s p99 501.9us | postgres: 2745/s p99 874.9us | mongo: 404/s p99 12.91ms
+latest-mt  x4   babel-raw: 49291/s p99 243.1us | babel-adaptive: 17958/s p99 566.5us | babel-tcp: 12590/s p99 520.0us | postgres: 9842/s p99 871.7us | mongo: 1204/s p99 21.90ms
+latest-mt  x16  babel-raw: 107443/s p99 835.7us | babel-adaptive: 37535/s p99 1.87ms | babel-tcp: 28223/s p99 1.92ms | postgres: 23412/s p99 1.79ms | mongo: 3156/s p99 62.89ms
+space      babel-raw: 134.75 MB
+space      babel-adaptive: 134.75 MB
+space      babel-tcp: 134.75 MB
+space      postgres: 62.62 MB
+space      mongo: 32.10 MB
