@@ -105,8 +105,28 @@ pub trait ReadTxn {
     fn len(&self, table: Table) -> Result<u64>;
 }
 
+/// One `(key, value)` pair of [`WriteTxn::put_many`].
+pub type KeyValue<'e> = (&'e [u8], &'e [u8]);
+
 pub trait WriteTxn: ReadTxn {
     fn put(&mut self, table: Table, key: &[u8], value: &[u8]) -> Result<()>;
+
+    /// Puts every entry into `table`, in order: exactly the effect of calling `put` once per
+    /// entry (for a key given twice, the later value wins). On `Err` the entries before the
+    /// failing one may already be written; like after any failed write, drop the transaction.
+    ///
+    /// Backends override it to amortize per-call costs over a batch (redb opens the table
+    /// once per call instead of once per entry).
+    fn put_many(
+        &mut self,
+        table: Table,
+        entries: &mut dyn Iterator<Item = KeyValue<'_>>,
+    ) -> Result<()> {
+        for (key, value) in entries {
+            self.put(table, key, value)?;
+        }
+        Ok(())
+    }
 
     /// Returns whether the key existed.
     fn remove(&mut self, table: Table, key: &[u8]) -> Result<bool>;

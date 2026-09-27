@@ -93,6 +93,374 @@ fn redb_specifics() -> Result<()> {
     Ok(())
 }
 
+/// `put_many` has exactly the effect of one `put` per entry, in order.
+fn put_many_matches_put<S: Store>(s: &S) -> Result<()> {
+    let key = |i: u32| format!("k{:04}", (i * 7919) % 1000).into_bytes();
+    let value = |i: u32| format!("v{i}").repeat(i as usize % 50).into_bytes();
+    let mut w = s.begin_write()?;
+    w.put(Table::Records, b"k0000", b"put before")?;
+    w.put(Table::Records, b"zz", b"untouched")?;
+    // 1500 entries over 1000 keys: 500 keys are given twice, the later value must win
+    let entries: Vec<(Vec<u8>, Vec<u8>)> = (0..1500).map(|i| (key(i % 1000), value(i))).collect();
+    w.put_many(
+        Table::Records,
+        &mut entries.iter().map(|(k, v)| (k.as_slice(), v.as_slice())),
+    )?;
+    w.put_many(Table::Meta, &mut std::iter::empty())?;
+    w.put_many(
+        Table::Objects,
+        &mut [(b"o".as_slice(), b"object".as_slice())].into_iter(),
+    )?;
+    let mut model = std::collections::BTreeMap::new();
+    model.insert(b"zz".to_vec(), b"untouched".to_vec());
+    for (k, v) in &entries {
+        model.insert(k.clone(), v.clone());
+    }
+    assert_eq!(
+        w.len(Table::Records)?,
+        model.len() as u64,
+        "inside the write transaction"
+    );
+    w.commit(Durability::Immediate)?;
+    let r = s.begin_read()?;
+    assert_eq!(r.len(Table::Records)?, model.len() as u64);
+    for (k, v) in &model {
+        assert_eq!(
+            r.get(Table::Records, k)?.as_ref(),
+            Some(v),
+            "key {}",
+            String::from_utf8_lossy(k)
+        );
+    }
+    assert_eq!(r.len(Table::Meta)?, 0);
+    assert_eq!(r.get(Table::Objects, b"o")?, Some(b"object".to_vec()));
+    drop(r);
+    // dropped without commit: nothing of it stays
+    let mut w = s.begin_write()?;
+    w.put_many(
+        Table::Records,
+        &mut [(b"zz".as_slice(), b"changed".as_slice())].into_iter(),
+    )?;
+    drop(w);
+    assert_eq!(
+        s.begin_read()?.get(Table::Records, b"zz")?,
+        Some(b"untouched".to_vec())
+    );
+    Ok(())
+}
+
+#[test]
+fn put_many_mem_and_redb() -> Result<()> {
+    put_many_matches_put(&MemStore::new())?;
+    let dir = tempfile::tempdir()?;
+    put_many_matches_put(&RedbStore::open(dir.path().join("db.redb"), CACHE)?)
+}
+
+fn get_u64<T: ReadTxn>(r: &T, key: &[u8]) -> Result<Option<u64>> {
+    Ok(r.get(Table::Records, key)?
+        .map(|v| u64::from_be_bytes(v.as_slice().try_into().expect("8-byte counter value"))))
+}
+
+fn put_u64(store: &RedbStore, key: &[u8], v: u64, durability: Durability) -> Result<()> {
+    let mut w = store.begin_write()?;
+    w.put(Table::Records, key, &v.to_be_bytes())?;
+    w.commit(durability)
+}
+
+/// Snapshot reuse (see `store::redb`): a reused snapshot is never older than the last commit,
+/// open read transactions keep their snapshot across commits, aborts keep the cache, and every
+/// commit empties it.
+#[test]
+fn redb_snapshot_reuse_follows_commits() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let mut store = RedbStore::open(dir.path().join("db.redb"), CACHE)?;
+    let k = b"k".as_slice();
+    put_u64(&store, k, 1, Durability::Immediate)?;
+    assert_eq!(
+        store.cached_snapshots(),
+        0,
+        "a commit leaves nothing cached"
+    );
+
+    let r1 = store.begin_read()?;
+    assert_eq!(get_u64(&r1, k)?, Some(1));
+    assert_eq!(store.cached_snapshots(), 1, "the first read is cached");
+    let r2 = store.begin_read()?;
+    assert_eq!(get_u64(&r2, k)?, Some(1));
+    assert_eq!(store.cached_snapshots(), 1, "the second read reuses it");
+
+    for (v, durability) in [(2, Durability::Deferred), (3, Durability::Immediate)] {
+        put_u64(&store, k, v, durability)?;
+        assert_eq!(store.cached_snapshots(), 0, "a commit empties the cache");
+        assert_eq!(
+            get_u64(&store.begin_read()?, k)?,
+            Some(v),
+            "{durability:?} commit"
+        );
+        assert_eq!(get_u64(&r1, k)?, Some(1), "an open read keeps its snapshot");
+        assert_eq!(get_u64(&r2, k)?, Some(1), "an open read keeps its snapshot");
+    }
+
+    // an aborted write changes nothing: the cached snapshot stays valid and in use
+    assert_eq!(store.cached_snapshots(), 1);
+    {
+        let mut w = store.begin_write()?;
+        w.put(Table::Records, k, &9u64.to_be_bytes())?;
+        w.put(Table::Records, b"other", b"x")?;
+        assert_eq!(
+            get_u64(&store.begin_read()?, k)?,
+            Some(3),
+            "uncommitted write"
+        );
+    }
+    assert_eq!(store.cached_snapshots(), 1, "an abort keeps the cache");
+    assert_eq!(get_u64(&store.begin_read()?, k)?, Some(3));
+    assert_eq!(store.begin_read()?.get(Table::Records, b"other")?, None);
+
+    // a commit that changes nothing still starts a new generation
+    store.begin_write()?.commit(Durability::Deferred)?;
+    assert_eq!(store.cached_snapshots(), 0);
+    let r3 = store.begin_read()?;
+    assert_eq!(get_u64(&r3, k)?, Some(3));
+
+    // readers on other threads use their own shards
+    std::thread::scope(|s| {
+        for _ in 0..4 {
+            s.spawn(|| {
+                let r = store.begin_read().expect("begin_read");
+                assert_eq!(get_u64(&r, k).expect("get"), Some(3));
+            });
+        }
+    });
+    assert!(
+        store.cached_snapshots() >= 2,
+        "one snapshot per reading thread"
+    );
+
+    // compaction releases the cached snapshots but not the ones still open
+    assert!(
+        matches!(store.compact(), Err(Error::Backend(_))),
+        "open readers"
+    );
+    drop((r1, r2, r3));
+    assert!(store.compact()?);
+    assert_eq!(get_u64(&store.begin_read()?, k)?, Some(3));
+    put_u64(&store, k, 4, Durability::Immediate)?;
+    assert_eq!(get_u64(&store.begin_read()?, k)?, Some(4));
+    Ok(())
+}
+
+/// Readers never see a value older than one whose commit returned before they started, nor
+/// older than one another reader saw before they started, nor a value not yet committed; each
+/// reader's values only grow. Commits alternate `Deferred` and `Immediate`.
+#[test]
+fn redb_snapshot_reuse_never_serves_stale_reads() -> Result<()> {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::SeqCst};
+    const READERS: usize = 8;
+    const COMMITS: u64 = 1500;
+    let dir = tempfile::tempdir()?;
+    let store = RedbStore::open(dir.path().join("db.redb"), CACHE)?;
+    let key = b"counter".as_slice();
+    put_u64(&store, key, 0, Durability::Immediate)?;
+    // started: highest value a commit was begun with; acked: highest value whose commit
+    // returned; seen: highest value a finished read returned.
+    let (started, acked, seen) = (AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0));
+    let done = AtomicBool::new(false);
+    let reads = std::thread::scope(|s| -> Result<Vec<u64>> {
+        let readers: Vec<_> = (0..READERS)
+            .map(|t| {
+                let (store, started, acked, seen, done) = (&store, &started, &acked, &seen, &done);
+                s.spawn(move || -> Result<u64> {
+                    let mut last = 0;
+                    let mut n = 0u64;
+                    let mut held = None;
+                    while !done.load(SeqCst) || n < 100 {
+                        let floor = acked.load(SeqCst).max(seen.load(SeqCst));
+                        let r = store.begin_read()?;
+                        let v = get_u64(&r, key)?.expect("counter");
+                        let ceil = started.load(SeqCst);
+                        assert!(
+                            v >= floor,
+                            "reader {t}: stale read {v}, {floor} was visible before"
+                        );
+                        assert!(v <= ceil, "reader {t}: phantom {v}, only {ceil} begun");
+                        assert!(v >= last, "reader {t}: went back from {last} to {v}");
+                        seen.fetch_max(v, SeqCst);
+                        last = v;
+                        n += 1;
+                        // sometimes keep a read open for a while: its snapshot must not move
+                        if n % 97 == t as u64 {
+                            held = Some((r, v));
+                        } else if let Some((h, hv)) = held.take_if(|_| n.is_multiple_of(13)) {
+                            assert_eq!(
+                                get_u64(&h, key)?,
+                                Some(hv),
+                                "reader {t}: a held snapshot moved"
+                            );
+                        }
+                    }
+                    Ok(n)
+                })
+            })
+            .collect();
+        let written = (1..=COMMITS).try_for_each(|v| {
+            started.store(v, SeqCst);
+            let durability = if v % 10 == 0 {
+                Durability::Immediate
+            } else {
+                Durability::Deferred
+            };
+            put_u64(&store, key, v, durability)?;
+            acked.store(v, SeqCst);
+            Ok(())
+        });
+        done.store(true, SeqCst);
+        let mut reads = Vec::new();
+        for r in readers {
+            reads.push(r.join().expect("reader thread")?);
+        }
+        written.map(|()| reads)
+    })?;
+    assert!(
+        reads.iter().all(|&n| n >= 100),
+        "reads per thread: {reads:?}"
+    );
+    assert_eq!(get_u64(&store.begin_read()?, key)?, Some(COMMITS));
+    Ok(())
+}
+
+/// A snapshot cached by a thread that then stays idle must not keep redb from reusing the pages
+/// that later commits free: the file stays small while the same keys are rewritten many times.
+#[test]
+fn redb_snapshot_cache_does_not_pin_freed_pages() -> Result<()> {
+    const KEYS: u32 = 4096;
+    const VALUE: usize = 1000;
+    const ROUNDS: u8 = 24;
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("db.redb");
+    let store = &RedbStore::open(&path, CACHE)?;
+    let rewrite = |round: u8| -> Result<()> {
+        let mut w = store.begin_write()?;
+        let value = vec![round; VALUE];
+        for i in 0..KEYS {
+            w.put(Table::Records, &i.to_be_bytes(), &value)?;
+        }
+        w.commit(Durability::Immediate)
+    };
+    rewrite(0)?;
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    std::thread::scope(|s| -> Result<()> {
+        let idle = s.spawn(move || -> Result<()> {
+            // one read, cached in this thread's shard, then idle until the end
+            assert_eq!(store.begin_read()?.len(Table::Records)?, u64::from(KEYS));
+            rx.recv().ok();
+            Ok(())
+        });
+        while store.cached_snapshots() == 0 {
+            std::thread::yield_now();
+        }
+        for round in 1..=ROUNDS {
+            rewrite(round)?;
+        }
+        tx.send(()).ok();
+        idle.join().expect("idle reader")
+    })?;
+    let data = u64::from(KEYS) * VALUE as u64;
+    let file = std::fs::metadata(&path)?.len();
+    println!("{ROUNDS} rewrites of {data} bytes: file {file} bytes");
+    // pinned, every round would need new pages: more than ROUNDS x data
+    assert!(
+        file < 16 * data,
+        "file of {file} bytes for {data} bytes of data"
+    );
+    let first = store
+        .begin_read()?
+        .get(Table::Records, &0u32.to_be_bytes())?;
+    assert_eq!(first, Some(vec![ROUNDS; VALUE]));
+    Ok(())
+}
+
+/// `compact` rewrites a table whose leaves were left half empty (appends at the end of many
+/// key ranges, like chat messages per channel): same entries, far fewer pages.
+#[test]
+fn redb_compact_rewrites_fragmented_tables() -> Result<()> {
+    const RANGES: u32 = 64;
+    const RECORDS: u32 = 12_000;
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("db.redb");
+    let mut store = RedbStore::open(&path, CACHE)?;
+    let mut model = std::collections::BTreeMap::new();
+    let mut payload = 0;
+    for batch in 0..RECORDS / 500 {
+        let mut w = store.begin_write()?;
+        for i in batch * 500..(batch + 1) * 500 {
+            let key = format!("ch/{:03}/{i:08}", i % RANGES).into_bytes();
+            let value = format!("message {i:08} ")
+                .repeat(1 + i as usize % 32)
+                .into_bytes();
+            w.put(Table::Records, &key, &value)?;
+            payload += key.len() + value.len();
+            model.insert(key, value);
+        }
+        w.commit(Durability::Immediate)?;
+    }
+    // other tables: small, and one of values that each need a leaf of their own
+    let mut w = store.begin_write()?;
+    w.put(Table::Meta, b"m", b"1")?;
+    for i in 0..64u32 {
+        w.put(Table::Objects, &i.to_be_bytes(), &vec![i as u8; 20_000])?;
+    }
+    w.commit(Durability::Immediate)?;
+    let loaded = std::fs::metadata(&path)?.len();
+    assert!(store.compact()?);
+    let compacted = std::fs::metadata(&path)?.len();
+    println!(
+        "{payload} bytes of records: file {loaded} bytes after the load, {compacted} after compact"
+    );
+    let objects = 64 * (32 << 10);
+    assert!(
+        compacted < (payload as u64) * 3 / 2 + objects + (1 << 20),
+        "compacted file of {compacted} bytes for {payload} bytes of records"
+    );
+
+    let r = store.begin_read()?;
+    let mut seen = Vec::new();
+    r.scan(
+        Table::Records,
+        std::ops::Bound::Unbounded,
+        std::ops::Bound::Unbounded,
+        false,
+        &mut |k, v| {
+            seen.push((k.to_vec(), v.to_vec()));
+            Ok(true)
+        },
+    )?;
+    assert!(
+        seen.iter().map(|(k, v)| (k, v)).eq(model.iter()),
+        "records changed by compact"
+    );
+    assert_eq!(r.len(Table::Records)?, u64::from(RECORDS));
+    assert_eq!(r.get(Table::Meta, b"m")?, Some(b"1".to_vec()));
+    assert_eq!(r.len(Table::Objects)?, 64);
+    assert_eq!(
+        r.get(Table::Objects, &7u32.to_be_bytes())?,
+        Some(vec![7; 20_000])
+    );
+    drop(r);
+    // still writable, and a second compact finds nothing to rewrite
+    put_u64(&store, b"after", 1, Durability::Immediate)?;
+    assert!(store.compact()?);
+    drop(store);
+    let store = RedbStore::open(&path, CACHE)?;
+    let r = store.begin_read()?;
+    assert_eq!(get_u64(&r, b"after")?, Some(1));
+    assert_eq!(r.len(Table::Records)?, u64::from(RECORDS) + 1);
+    for table in Table::ALL {
+        r.len(table)?;
+    }
+    Ok(())
+}
+
 fn percentile(sorted: &[Duration], p: f64) -> Duration {
     let rank = (p / 100.0 * sorted.len() as f64).ceil() as usize;
     sorted[rank.clamp(1, sorted.len()) - 1]

@@ -50,6 +50,10 @@ name = "compare"
 harness = false
 required-features = ["compare"]
 
+[[bench]]
+name = "store"
+harness = false
+
 [profile.release]
 debug = "line-tables-only"
 
