@@ -2,6 +2,8 @@
 //! they are persisted in `meta` when the database is created and the persisted
 //! values win when an existing database is opened.
 
+use std::path::{Path, PathBuf};
+
 use crate::error::{Error, Result};
 use crate::format::codec_id;
 
@@ -288,5 +290,122 @@ impl Config {
             )));
         }
         Ok(())
+    }
+}
+
+/// Smallest and largest WAL file (`WalConfig::segment_bytes`).
+pub const MIN_WAL_SEGMENT: u64 = 64 << 10;
+pub const MAX_WAL_SEGMENT: u64 = 64 << 30;
+
+/// How a WAL write is made durable (`store::wal`, "Why").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WalSync {
+    /// `FILE_FLAG_WRITE_THROUGH` on a cached handle (Linux: `O_DSYNC`).
+    /// PostgreSQL's default on Windows (`wal_sync_method = open_datasync`) and
+    /// its guarantee: on Windows the drive's volatile cache is not necessarily
+    /// written through (see the `CreateFile` documentation).
+    #[default]
+    WriteThrough,
+    /// Windows only: `FILE_FLAG_WRITE_THROUGH | FILE_FLAG_NO_BUFFERING` with
+    /// 4 KiB-aligned writes, the combination for which the OS also asks the
+    /// drive to write through its cache (FUA).
+    WriteThroughUnbuffered,
+    /// A cached write followed by `FlushFileBuffers` (`fdatasync`): the drive
+    /// cache flush of redb's `Immediate` commits (PostgreSQL's `fsync`).
+    Flush,
+}
+
+/// Write-ahead log in front of the storage backend (`store::wal::WalStore`,
+/// `Db::open_wal`); layout in `docs/format.md` §19.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WalConfig {
+    /// Directory of the WAL file; `None` = next to the database file. See
+    /// `wal_path` for the name.
+    pub dir: Option<PathBuf>,
+    /// Size of the WAL file, preallocated (zero-filled) when it is created and
+    /// rounded up to 4 KiB. It is also the checkpoint threshold: when the log
+    /// of a commit does not fit in what is left, that commit becomes a
+    /// checkpoint (one `Immediate` commit of the backend) and the log restarts
+    /// at the start of the file. An existing WAL of another size is replaced
+    /// after recovery. Default 16 MiB (PostgreSQL's segment size): a larger file
+    /// checkpoints less often but lets more dirty backend pages pile up in
+    /// between, which measured slower under sustained load.
+    pub segment_bytes: u64,
+    /// `Deferred` commits keep their log records in memory until the next
+    /// `Immediate` commit; past this many bytes they are written (and so made
+    /// durable) at once. Bounds memory and the window of deferred commits a
+    /// crash can lose.
+    pub max_pending_bytes: usize,
+    /// Transactions whose log record would be larger than this are not logged:
+    /// their commit is a checkpoint instead (one fsync rather than copying,
+    /// say, a large import batch into the log). Capped at what fits in the file.
+    pub max_record_bytes: usize,
+    /// How each WAL write is made durable.
+    pub sync: WalSync,
+    /// Open even when the WAL file is missing although the database was not
+    /// closed cleanly, accepting the loss of the commits that only it held.
+    pub recreate_missing: bool,
+}
+
+impl Default for WalConfig {
+    fn default() -> Self {
+        WalConfig {
+            dir: None,
+            segment_bytes: 16 << 20,
+            max_pending_bytes: 4 << 20,
+            max_record_bytes: 4 << 20,
+            sync: WalSync::default(),
+            recreate_missing: false,
+        }
+    }
+}
+
+impl WalConfig {
+    pub fn validate(&self) -> Result<()> {
+        if !(MIN_WAL_SEGMENT..=MAX_WAL_SEGMENT).contains(&self.segment_bytes) {
+            return Err(Error::InvalidArgument(format!(
+                "WAL segment_bytes {} outside [{MIN_WAL_SEGMENT}, {MAX_WAL_SEGMENT}]",
+                self.segment_bytes
+            )));
+        }
+        if self.max_record_bytes < 64 {
+            return Err(Error::InvalidArgument("WAL max_record_bytes must be >= 64".into()));
+        }
+        Ok(())
+    }
+
+    /// Size of the WAL file: `segment_bytes` rounded up to 4 KiB.
+    pub fn segment_capacity(&self) -> u64 {
+        self.segment_bytes.div_ceil(4096) * 4096
+    }
+
+    /// Largest record that is logged: `max_record_bytes`, capped by what fits
+    /// after the 4 KiB file header and by the u32 length field.
+    pub fn record_limit(&self) -> usize {
+        let fits = usize::try_from(self.segment_capacity() - 4096).unwrap_or(usize::MAX);
+        let field = usize::try_from(u64::from(u32::MAX) + 32).unwrap_or(usize::MAX);
+        self.max_record_bytes.min(fits).min(field)
+    }
+
+    /// Path of the WAL of the database file `db_path`: `<file name>.wal` next
+    /// to it, or with `dir`, `<file name>.<16 hex digits>.wal` in `dir`, the
+    /// digits starting the BLAKE3 of the database's absolute path, so that
+    /// databases with the same file name never share a WAL.
+    pub fn wal_path(&self, db_path: &Path) -> PathBuf {
+        let mut name = db_path
+            .file_name()
+            .map_or_else(|| "babeldb".into(), |n| n.to_os_string());
+        match &self.dir {
+            None => {
+                name.push(".wal");
+                db_path.with_file_name(name)
+            }
+            Some(dir) => {
+                let abs = std::path::absolute(db_path).unwrap_or_else(|_| db_path.to_path_buf());
+                let hash = blake3::hash(abs.as_os_str().as_encoded_bytes()).to_hex();
+                name.push(format!(".{}.wal", &hash[..16]));
+                dir.join(name)
+            }
+        }
     }
 }

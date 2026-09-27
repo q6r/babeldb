@@ -13,6 +13,7 @@ use crate::error::Result;
 pub mod conformance;
 pub mod mem;
 pub mod redb;
+pub mod wal;
 #[cfg(feature = "lmdb")]
 pub mod heed;
 #[cfg(feature = "fjall")]

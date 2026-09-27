@@ -25,13 +25,14 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 
 use crate::cache::BlockCache;
-use crate::config::{Config, Mode, MAX_BLOCK_SIZE, MIN_BLOCK_SIZE};
+use crate::config::{Config, Mode, WalConfig, MAX_BLOCK_SIZE, MIN_BLOCK_SIZE};
 use crate::error::{Error, Result};
 use crate::format::{self, meta_key, SourceDescriptor, FORMAT_VERSION};
 use crate::generator::{Generator, Registry};
 use crate::planner::Planner;
 use crate::stats::{EngineCounters, Stats};
 use crate::store::redb::RedbStore;
+use crate::store::wal::WalStore;
 use crate::store::{Durability, Store, Table, WriteTxn};
 
 pub use autodict::AutoDictStatus;
@@ -182,6 +183,33 @@ impl Db<RedbStore> {
     /// Open or create a redb-backed database file.
     pub fn open(path: impl AsRef<Path>, cfg: Config) -> Result<Db<RedbStore>> {
         let store = RedbStore::open(path, cfg.backend_cache_bytes)?;
+        Db::with_store(store, cfg)
+    }
+}
+
+/// redb behind a write-through write-ahead log (`Db::open_wal`).
+pub type WalDb = Db<WalStore<RedbStore>>;
+
+impl Db<WalStore<RedbStore>> {
+    /// Open or create a redb database file with a WAL next to it (`<file>.wal`,
+    /// `WalConfig::default()`). A durable commit costs one WAL write of its log
+    /// record instead of an fsync of the database file; checkpoints fsync it
+    /// every `segment_bytes` of log. The default `WalSync::WriteThrough` gives
+    /// PostgreSQL's default guarantee on Windows, weaker than `open`'s fsync
+    /// (see `store::wal`); `WalSync::Flush` matches it. After a crash, reopen
+    /// with `open_wal` (not `open`): recovery applies the acknowledged commits
+    /// that only the WAL holds.
+    pub fn open_wal(path: impl AsRef<Path>, cfg: Config) -> Result<WalDb> {
+        Self::open_wal_with(path, cfg, WalConfig::default())
+    }
+
+    /// `open_wal` with an explicit WAL configuration.
+    pub fn open_wal_with(path: impl AsRef<Path>, cfg: Config, wal: WalConfig) -> Result<WalDb> {
+        cfg.validate()?;
+        let path = path.as_ref();
+        let wal_path = wal.wal_path(path);
+        let inner = RedbStore::open(path, cfg.backend_cache_bytes)?;
+        let store = WalStore::open(inner, wal_path, wal)?;
         Db::with_store(store, cfg)
     }
 }
