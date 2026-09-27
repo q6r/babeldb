@@ -64,6 +64,8 @@ use babeldb::datasets::{self, Scenario, SplitMix64};
 use babeldb::planner::TrainOptions;
 use babeldb::scale::chat::message_key;
 use babeldb::scale::group_commit::{GroupCommitConfig, GroupCommitter, WriteDurability};
+use babeldb::config::{WalConfig, WalSync};
+use babeldb::store::Store;
 use babeldb::{BatchOp, Config, Db, Expect, ScanItem, ScanOptions};
 use mongodb::bson::spec::BinarySubtype;
 use mongodb::bson::{Binary, Bson, Document, doc};
@@ -350,15 +352,29 @@ enum BabelEngine {
     Dict,
 }
 
-/// `babel-*` system names: (engine, behind the TCP server).
-fn babel_system(name: &str) -> Option<(BabelEngine, bool)> {
+/// `babel-*` system names: (engine, behind the TCP server, WAL mode).
+/// `babel-wal*` systems use `Db::open_wal_with` (write-ahead log in front of
+/// redb): `wal` = `WalSync::WriteThrough` (PostgreSQL's default guarantee on
+/// Windows), `wal-strict` = `WriteThroughUnbuffered` (FUA requested),
+/// `wal-flush` = `Flush` (FlushFileBuffers, redb's own guarantee).
+fn babel_system(name: &str) -> Option<(BabelEngine, bool, Option<WalSync>)> {
+    let wt = Some(WalSync::WriteThrough);
     Some(match name {
-        "babel-raw" => (BabelEngine::Raw, false),
-        "babel-adaptive" => (BabelEngine::Adaptive, false),
-        "babel-dict" => (BabelEngine::Dict, false),
-        "babel-tcp" => (BabelEngine::Adaptive, true),
-        "babel-tcp-raw" => (BabelEngine::Raw, true),
-        "babel-tcp-dict" => (BabelEngine::Dict, true),
+        "babel-raw" => (BabelEngine::Raw, false, None),
+        "babel-adaptive" => (BabelEngine::Adaptive, false, None),
+        "babel-dict" => (BabelEngine::Dict, false, None),
+        "babel-tcp" => (BabelEngine::Adaptive, true, None),
+        "babel-tcp-raw" => (BabelEngine::Raw, true, None),
+        "babel-tcp-dict" => (BabelEngine::Dict, true, None),
+        "babel-wal-raw" => (BabelEngine::Raw, false, wt),
+        "babel-wal" => (BabelEngine::Adaptive, false, wt),
+        "babel-wal-dict" => (BabelEngine::Dict, false, wt),
+        "babel-wal-tcp" => (BabelEngine::Adaptive, true, wt),
+        "babel-wal-tcp-raw" => (BabelEngine::Raw, true, wt),
+        "babel-wal-tcp-dict" => (BabelEngine::Dict, true, wt),
+        "babel-wal-strict-raw" => (BabelEngine::Raw, false, Some(WalSync::WriteThroughUnbuffered)),
+        "babel-wal-strict-tcp-raw" => (BabelEngine::Raw, true, Some(WalSync::WriteThroughUnbuffered)),
+        "babel-wal-flush-raw" => (BabelEngine::Raw, false, Some(WalSync::Flush)),
         _ => return None,
     })
 }
@@ -366,8 +382,8 @@ fn babel_system(name: &str) -> Option<(BabelEngine, bool)> {
 /// The database is owned here; the in-process committer (or the TCP server
 /// and its committer) hold clones of the `Arc` only while running, so
 /// `compact` can stop them and get the database back exclusively.
-struct BabelTarget {
-    db: Arc<Db>,
+struct BabelTarget<S: Store> {
+    db: Arc<Db<S>>,
     durability: WriteDurability,
     /// `Some(workers)`: sessions go through the TCP server.
     tcp_threads: Option<usize>,
@@ -377,7 +393,14 @@ struct BabelTarget {
     server: Option<(ServerHandle, SocketAddr)>,
 }
 
-fn babel_open(p: &Params, name: &str, engine: BabelEngine, tcp: bool, tcp_threads: usize) -> R<BabelTarget> {
+fn babel_open(
+    p: &Params,
+    name: &str,
+    engine: BabelEngine,
+    tcp: bool,
+    wal: Option<WalSync>,
+    tcp_threads: usize,
+) -> R<Box<dyn Target>> {
     let dir = p.dir.join(name);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)?;
@@ -385,7 +408,24 @@ fn babel_open(p: &Params, name: &str, engine: BabelEngine, tcp: bool, tcp_thread
         BabelEngine::Raw => Config::raw_only(),
         BabelEngine::Adaptive | BabelEngine::Dict => Config::adaptive(),
     };
-    let db = Db::open(dir.join("babel.redb"), cfg)?;
+    let path = dir.join("babel.redb");
+    Ok(match wal {
+        None => Box::new(babel_target(p, name, engine, tcp, tcp_threads, Db::open(path, cfg)?)?),
+        Some(sync) => {
+            let wal_cfg = WalConfig { sync, ..WalConfig::default() };
+            Box::new(babel_target(p, name, engine, tcp, tcp_threads, Db::open_wal_with(path, cfg, wal_cfg)?)?)
+        }
+    })
+}
+
+fn babel_target<S: Store>(
+    p: &Params,
+    name: &str,
+    engine: BabelEngine,
+    tcp: bool,
+    tcp_threads: usize,
+    db: Db<S>,
+) -> R<BabelTarget<S>> {
     if engine == BabelEngine::Dict {
         // Trained on the first messages of the workload, before anything is
         // measured (the load below then encodes every message with it).
@@ -419,7 +459,7 @@ fn babel_open(p: &Params, name: &str, engine: BabelEngine, tcp: bool, tcp_thread
     Ok(target)
 }
 
-impl BabelTarget {
+impl<S: Store> BabelTarget<S> {
     /// Start the committer, or the TCP server (which has its own).
     fn start(&mut self) -> R<()> {
         match self.tcp_threads {
@@ -482,12 +522,12 @@ impl BabelTarget {
     }
 }
 
-struct BabelSession {
-    db: Arc<Db>,
+struct BabelSession<S: Store> {
+    db: Arc<Db<S>>,
     committer: Arc<GroupCommitter>,
 }
 
-impl Session for BabelSession {
+impl<S: Store> Session for BabelSession<S> {
     fn load(&mut self, batch: &[Msg]) -> R<()> {
         let keys: Vec<[u8; 16]> = batch.iter().map(|m| message_key(m.channel, m.id)).collect();
         let ops: Vec<BatchOp<'_>> = batch
@@ -568,7 +608,7 @@ fn latest_pairs(items: Vec<ScanItem>) -> Vec<(u64, Vec<u8>)> {
         .collect()
 }
 
-impl Target for BabelTarget {
+impl<S: Store> Target for BabelTarget<S> {
     fn session(&self) -> R<Box<dyn Session>> {
         if let Some((_, addr)) = &self.server {
             return Ok(Box::new(BabelTcpSession { client: BabelClient::connect(addr)? }));
@@ -1006,7 +1046,7 @@ fn run_system(p: &Params, name: &str, report: &mut Report) -> R<()> {
     }
     let max_threads = p.put_threads.iter().chain(&p.read_threads).copied().max().unwrap_or(1);
     let mut target: Box<dyn Target> = match (babel_system(name), name) {
-        (Some((engine, tcp)), _) => Box::new(babel_open(p, name, engine, tcp, max_threads + 2)?),
+        (Some((engine, tcp, wal)), _) => babel_open(p, name, engine, tcp, wal, max_threads + 2)?,
         (None, "postgres") => Box::new(pg_open(p)?),
         (None, "mongo") => Box::new(mongo_open(p)?),
         (None, other) => return Err(format!("unknown system {other}").into()),
