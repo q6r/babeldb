@@ -50,7 +50,8 @@ fn scan_map(
     f: &mut ScanFn<'_>,
 ) -> Result<()> {
     if let (Bound::Included(s) | Bound::Excluded(s), Bound::Included(e) | Bound::Excluded(e)) = (start, end) {
-        if s > e {
+        // BTreeMap::range panics on these empty ranges
+        if s > e || (s == e && matches!((start, end), (Bound::Excluded(_), Bound::Excluded(_)))) {
             return Ok(());
         }
     }
