@@ -61,7 +61,7 @@ Latências p50/p99 de cada linha: `bench-results/compare-round1.txt` e `compare.
 Mudanças integradas: WAL próprio com write-through na frente do redb (`Db::open_wal`),
 reuso de snapshots de leitura + pool de handles de leitura no redb, CPU do motor menor e
 dicionário zstd automático, group commit no servidor TCP. Mesmas condições da rodada 1
-(100 000 × 512 B, durabilidade equivalente, 1 repetição, mesma máquina; commit `c9…` do
+(100 000 × 512 B, durabilidade equivalente, 1 repetição, mesma máquina; commit `a1ee6b9` do
 harness com as variantes `babel-wal*`). Saída bruta: `bench-results/compare-round2.txt`.
 Nesta rodada os sistemas babeldb rodam as fases de leitura/escrita **depois** de
 `Db::compact` (o harness compacta após a carga; `--no-compact` volta às condições da rodada 1).
@@ -116,7 +116,8 @@ harness já reporta dados e WAL separados).
 ### Placar após a rodada 2
 
 - **Vencemos**: todas as leituras (2–4× o PostgreSQL via TCP; 15–40× embarcado), put durável
-  com 1 e 64 clientes via TCP, todas as escritas embarcadas, espaço compactado (empate com o
+  com 1 e 64 clientes via TCP, todas as escritas embarcadas unitárias e concorrentes (a carga
+  em lote embarcada, 69 k/s, ainda perde), espaço compactado (empate com o
   Mongo, metade do PG).
 - **Perdemos**: carga em lote (55 k/s vs 87 k/s do PG), put durável via TCP com 4 e 16
   clientes (9,3 k e 15,3 k vs 9,8 k e 25,2 k do PG), escrita concorrente com codec adaptive
