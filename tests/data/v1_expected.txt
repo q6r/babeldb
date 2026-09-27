@@ -1,0 +1,137 @@
+# babeldb persistent format v1: frozen fixtures. DO NOT EDIT, DO NOT REGENERATE.
+# Written once by `cargo test --test format_compat generate_v1_fixtures -- --ignored`,
+# checked by `open_v1_fixtures` (tests/format_compat.rs, record script `fixture_script`).
+# Keys and locations are lowercase hex ("-" = empty). Line types:
+#   fixture <file> mode=<mode> block_size=<n> inline_max=<n>
+#   note    <file> <free text>
+#   live    <file> <key> rev=<n> len=<n> kind=<kind> blake3=<hex> codecs=<name,...|->
+#   absent  <file> <key>
+#   history <file> <key> rev=<n> len=<n> tombstone=<0|1> current=<0|1> blake3=<hex|->
+#   source  <file> id=<n> kind=<n> adapter=<n> location=<hex> last=<rev>,<bytes>,<blake3>|-
+#   table   <file> <name> entries=<n> blake3=<BLAKE3 of (u64 LE len, key, u64 LE len, value)*>
+fixture v1_adaptive.redb mode=adaptive block_size=512 inline_max=64
+note v1_adaptive.redb import/failed interrupted by a source error: pending_imports rows now 0
+note v1_adaptive.redb import/crashed interrupted by a simulated crash: pending_imports rows now 1
+note v1_adaptive.redb zstd dictionary installed=true param_id=Some(1)
+note v1_adaptive.redb template installed=true param_id=Some(2)
+live v1_adaptive.redb 62696e006b6579ff rev=13 len=13 kind=inline blake3=9448a3b7ca2c1921d140e90f23c3e39016cb7c8587ebdc22804bff43e33906ae codecs=RawV1
+live v1_adaptive.redb 626c6f636b732f647570 rev=6 len=1536 kind=chunks blake3=4696d2f3ee67eb91685b20278df47a28f9df41ae858e07a324cc10100c57a51e codecs=RawV1,RawV1,RawV1
+live v1_adaptive.redb 626c6f636b732f6475702d63726f7373 rev=7 len=1024 kind=chunks blake3=f7e4f0617cdda6a9483c0cf1cb537722e7d161664a39d1e00c50197b06f9b2af codecs=RawV1,RawV1
+live v1_adaptive.redb 626c6f636b732f6d696e rev=4 len=65 kind=chunks blake3=61bffcd58d3cd91de2d793af22c0a74e92fdc9e68306c8edb2889fe8e4729fef codecs=RawV1
+live v1_adaptive.redb 626c6f636b732f6d756c7469 rev=5 len=1300 kind=chunks blake3=d43877b41b44a876a9da459d48e4bf58a580c50cd87b30a9f39030e9e3b872af codecs=RawV1,RawV1,RawV1
+live v1_adaptive.redb 636f6465632f6172697468 rev=9 len=1280 kind=chunks blake3=dafa160d3ae2f05b8a08f70f4dcb8e1d159048f66a463c20b11ced877f6e795f codecs=ArithmeticU64V1,ArithmeticU64V1,ArithmeticU64V1
+live v1_adaptive.redb 636f6465632f72616e646f6d rev=11 len=700 kind=chunks blake3=5be4270c540acfd8023cb2360372c908853e5b9540b4b0800777523279403191 codecs=RawV1,RawV1
+live v1_adaptive.redb 636f6465632f726570656174 rev=8 len=1200 kind=chunks blake3=91c5dfdd30a447c0242417aeaf455b6b58d7a4827f9559eab857af21e72d0a62 codecs=RepeatV1,RepeatV1,RepeatV1
+live v1_adaptive.redb 636f6465632f74657874 rev=10 len=2798 kind=chunks blake3=cf999e0cc387d407ba5cc6446b865d706cf054c53d9b9266337a7b3d76575442 codecs=ZstdV1,ZstdV1,ZstdV1,ZstdV1,ZstdV1,ZstdV1
+live v1_adaptive.redb 646963742f636861742d30 rev=23 len=188 kind=chunks blake3=50ae0fa6af828accb37c12723fb73fe4f73ee58f5e710352bb64e1ef47e4742c codecs=ZstdV1
+live v1_adaptive.redb 646963742f636861742d31 rev=24 len=188 kind=chunks blake3=c490a9b262171fbc02d8c54d5a212f5a1112d525f874e36bd07871361dac8003 codecs=ZstdV1
+live v1_adaptive.redb 646963742f636861742d32 rev=25 len=189 kind=chunks blake3=0ae73ceafcc22aa55a46c599bd64dca74206fb3afd4e0b521f45f32f7764a2db codecs=ZstdV1
+live v1_adaptive.redb 646963742f636861742d33 rev=26 len=189 kind=chunks blake3=24181da7b266340afbe22aa727b1783849f14971c2201d9f3e4c741d373478c8 codecs=ZstdV1
+live v1_adaptive.redb 67656e2f6172697468 rev=19 len=1600 kind=generated blake3=51432fe627dbd8df65f86d61ccb4657c407a5a3de4bf7d878ca1eb0bf586a29a codecs=-
+live v1_adaptive.redb 67656e2f726570656174 rev=21 len=4096 kind=generated blake3=b1876b108c3a23edd0405f79a46e436fac5e610461a9450278b18223cdefb883 codecs=-
+live v1_adaptive.redb 67656e2f786f66 rev=20 len=5000 kind=generated blake3=30cb5f76c096c960309b698cbcf529e59e7d8f4f32d275a848cd636b6889098e codecs=-
+live v1_adaptive.redb 696e6c696e652f656d707479 rev=2 len=0 kind=inline blake3=af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262 codecs=RawV1
+live v1_adaptive.redb 696e6c696e652f68656c6c6f rev=1 len=12 kind=inline blake3=c5cf35ba81055bb75036c75334dc28f9eedfa125939871fee82db3c13a3ed39d codecs=RawV1
+live v1_adaptive.redb 696e6c696e652f6d6178 rev=3 len=64 kind=inline blake3=4eed7141ea4a5cd4b788606bd23f46e212af9cacebacdc7d1f4c6dc7f2511b98 codecs=ArithmeticU64V1
+live v1_adaptive.redb 6f7665727772697465 rev=16 len=13 kind=inline blake3=af535d40f960c8065b981f73da9d8eeb7e1d5796939eb468927b4a33880bc3d3 codecs=RawV1
+live v1_adaptive.redb 736f757263652f696d706f7274 rev=22 len=1500 kind=chunks blake3=da5ab13b66343e8577111d3af88e3c415d3af6aa54bb6ef10d8eaf5162cfd8f1 codecs=RawV1,RawV1,RawV1
+live v1_adaptive.redb 74656d706c6174652f646f632d30 rev=27 len=272 kind=chunks blake3=74743668ed26632734948a1fc1a7833080e9ec1c048499c5d96847297e126423 codecs=TemplatePatchV1
+live v1_adaptive.redb 74656d706c6174652f646f632d31 rev=28 len=271 kind=chunks blake3=abad3d8e6e0d7fb9044550b0f2e364e25a9ec14346ccd7cc99428f2a465eb66b codecs=TemplatePatchV1
+live v1_adaptive.redb 74656d706c6174652f646f632d32 rev=29 len=272 kind=chunks blake3=d057f1e01b681b1f1011b093f6e8e1f2b55a30f358802777026cbad627aa3f19 codecs=TemplatePatchV1
+absent v1_adaptive.redb 64656c65746564
+absent v1_adaptive.redb 696d706f72742f63726173686564
+absent v1_adaptive.redb 696d706f72742f6661696c6564
+history v1_adaptive.redb 62696e006b6579ff rev=12 len=13 tombstone=0 current=0 blake3=0b77d43cb7e0a0ad9c253c69aab9e9d025dded4d00d1fb57b3f301158981b967
+history v1_adaptive.redb 62696e006b6579ff rev=13 len=13 tombstone=0 current=1 blake3=9448a3b7ca2c1921d140e90f23c3e39016cb7c8587ebdc22804bff43e33906ae
+history v1_adaptive.redb 626c6f636b732f647570 rev=6 len=1536 tombstone=0 current=1 blake3=4696d2f3ee67eb91685b20278df47a28f9df41ae858e07a324cc10100c57a51e
+history v1_adaptive.redb 626c6f636b732f6475702d63726f7373 rev=7 len=1024 tombstone=0 current=1 blake3=f7e4f0617cdda6a9483c0cf1cb537722e7d161664a39d1e00c50197b06f9b2af
+history v1_adaptive.redb 626c6f636b732f6d696e rev=4 len=65 tombstone=0 current=1 blake3=61bffcd58d3cd91de2d793af22c0a74e92fdc9e68306c8edb2889fe8e4729fef
+history v1_adaptive.redb 626c6f636b732f6d756c7469 rev=5 len=1300 tombstone=0 current=1 blake3=d43877b41b44a876a9da459d48e4bf58a580c50cd87b30a9f39030e9e3b872af
+history v1_adaptive.redb 636f6465632f6172697468 rev=9 len=1280 tombstone=0 current=1 blake3=dafa160d3ae2f05b8a08f70f4dcb8e1d159048f66a463c20b11ced877f6e795f
+history v1_adaptive.redb 636f6465632f72616e646f6d rev=11 len=700 tombstone=0 current=1 blake3=5be4270c540acfd8023cb2360372c908853e5b9540b4b0800777523279403191
+history v1_adaptive.redb 636f6465632f726570656174 rev=8 len=1200 tombstone=0 current=1 blake3=91c5dfdd30a447c0242417aeaf455b6b58d7a4827f9559eab857af21e72d0a62
+history v1_adaptive.redb 636f6465632f74657874 rev=10 len=2798 tombstone=0 current=1 blake3=cf999e0cc387d407ba5cc6446b865d706cf054c53d9b9266337a7b3d76575442
+history v1_adaptive.redb 64656c65746564 rev=17 len=700 tombstone=0 current=0 blake3=f950efa27e3a2e90a9f8a843df8b5cfd78e615584484cf4374e7cc38b0709f21
+history v1_adaptive.redb 64656c65746564 rev=18 len=0 tombstone=1 current=1 blake3=-
+history v1_adaptive.redb 646963742f636861742d30 rev=23 len=188 tombstone=0 current=1 blake3=50ae0fa6af828accb37c12723fb73fe4f73ee58f5e710352bb64e1ef47e4742c
+history v1_adaptive.redb 646963742f636861742d31 rev=24 len=188 tombstone=0 current=1 blake3=c490a9b262171fbc02d8c54d5a212f5a1112d525f874e36bd07871361dac8003
+history v1_adaptive.redb 646963742f636861742d32 rev=25 len=189 tombstone=0 current=1 blake3=0ae73ceafcc22aa55a46c599bd64dca74206fb3afd4e0b521f45f32f7764a2db
+history v1_adaptive.redb 646963742f636861742d33 rev=26 len=189 tombstone=0 current=1 blake3=24181da7b266340afbe22aa727b1783849f14971c2201d9f3e4c741d373478c8
+history v1_adaptive.redb 67656e2f6172697468 rev=19 len=1600 tombstone=0 current=1 blake3=51432fe627dbd8df65f86d61ccb4657c407a5a3de4bf7d878ca1eb0bf586a29a
+history v1_adaptive.redb 67656e2f726570656174 rev=21 len=4096 tombstone=0 current=1 blake3=b1876b108c3a23edd0405f79a46e436fac5e610461a9450278b18223cdefb883
+history v1_adaptive.redb 67656e2f786f66 rev=20 len=5000 tombstone=0 current=1 blake3=30cb5f76c096c960309b698cbcf529e59e7d8f4f32d275a848cd636b6889098e
+history v1_adaptive.redb 696e6c696e652f656d707479 rev=2 len=0 tombstone=0 current=1 blake3=af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262
+history v1_adaptive.redb 696e6c696e652f68656c6c6f rev=1 len=12 tombstone=0 current=1 blake3=c5cf35ba81055bb75036c75334dc28f9eedfa125939871fee82db3c13a3ed39d
+history v1_adaptive.redb 696e6c696e652f6d6178 rev=3 len=64 tombstone=0 current=1 blake3=4eed7141ea4a5cd4b788606bd23f46e212af9cacebacdc7d1f4c6dc7f2511b98
+history v1_adaptive.redb 6f7665727772697465 rev=14 len=13 tombstone=0 current=0 blake3=3c9c23669609f50c13b5994dfb37b276e93a68a9baac945a6b73a53e9220ee88
+history v1_adaptive.redb 6f7665727772697465 rev=15 len=600 tombstone=0 current=0 blake3=e17da20ce33acb4ddb0d1d7d7ab85a998359f4965d5351e510bd7304b6595b9a
+history v1_adaptive.redb 6f7665727772697465 rev=16 len=13 tombstone=0 current=1 blake3=af535d40f960c8065b981f73da9d8eeb7e1d5796939eb468927b4a33880bc3d3
+history v1_adaptive.redb 736f757263652f696d706f7274 rev=22 len=1500 tombstone=0 current=1 blake3=da5ab13b66343e8577111d3af88e3c415d3af6aa54bb6ef10d8eaf5162cfd8f1
+history v1_adaptive.redb 74656d706c6174652f646f632d30 rev=27 len=272 tombstone=0 current=1 blake3=74743668ed26632734948a1fc1a7833080e9ec1c048499c5d96847297e126423
+history v1_adaptive.redb 74656d706c6174652f646f632d31 rev=28 len=271 tombstone=0 current=1 blake3=abad3d8e6e0d7fb9044550b0f2e364e25a9ec14346ccd7cc99428f2a465eb66b
+history v1_adaptive.redb 74656d706c6174652f646f632d32 rev=29 len=272 tombstone=0 current=1 blake3=d057f1e01b681b1f1011b093f6e8e1f2b55a30f358802777026cbad627aa3f19
+source v1_adaptive.redb id=1 kind=1 adapter=1 location=66697874757265732f736f757263652e62696e last=22,1500,da5ab13b66343e8577111d3af88e3c415d3af6aa54bb6ef10d8eaf5162cfd8f1
+table v1_adaptive.redb meta entries=12 blake3=d6341670fde054b1815182f746ef2132ab67ee6c466a760f20c366c5b7745ba6
+table v1_adaptive.redb records entries=25 blake3=22eab26e9eb36a41860141712b2518ab9a5b676d52101cbc5cfe99b3f6170c94
+table v1_adaptive.redb objects entries=38 blake3=b750b081f0e164d1af34cf0f2193126b6533795e31fc0edc702b1078f1ab9b69
+table v1_adaptive.redb hash_candidates entries=38 blake3=a2569f9b804a824471a2af6dd9c1caec1d320e1eb3565af2de464983a9ee089a
+table v1_adaptive.redb refcounts entries=38 blake3=309b34a65dea4d95126636f6eaf8e0051fa66ba079677663666dc2e3eec600a4
+table v1_adaptive.redb params entries=2 blake3=f16018261a5de45d6291277922fda2338782d58ff3d1d0402a66750e904c555a
+table v1_adaptive.redb history entries=4 blake3=02dd9e29ee107ba889447a5d40bf2e73b97aafc1a252ffdd934e86b20b909264
+table v1_adaptive.redb sources entries=1 blake3=1c3bc3e74369426f8381c12e24b2a527f0fdcf1ccc87a0830dad4e3e4ddb5330
+table v1_adaptive.redb pending_imports entries=1 blake3=f92b0fa5f235e5423f29b7a63e1e3857ee403f012dce82ffd03d32c589152852
+fixture v1_babel_pure.redb mode=babel-pure block_size=512 inline_max=64
+note v1_babel_pure.redb import/failed interrupted by a source error: pending_imports rows now 0
+note v1_babel_pure.redb import/crashed interrupted by a simulated crash: pending_imports rows now 1
+live v1_babel_pure.redb 62696e006b6579ff rev=13 len=13 kind=inline blake3=9448a3b7ca2c1921d140e90f23c3e39016cb7c8587ebdc22804bff43e33906ae codecs=BabelAffineV1
+live v1_babel_pure.redb 626c6f636b732f647570 rev=6 len=1536 kind=chunks blake3=4696d2f3ee67eb91685b20278df47a28f9df41ae858e07a324cc10100c57a51e codecs=BabelAffineV1,BabelAffineV1,BabelAffineV1
+live v1_babel_pure.redb 626c6f636b732f6475702d63726f7373 rev=7 len=1024 kind=chunks blake3=f7e4f0617cdda6a9483c0cf1cb537722e7d161664a39d1e00c50197b06f9b2af codecs=BabelAffineV1,BabelAffineV1
+live v1_babel_pure.redb 626c6f636b732f6d696e rev=4 len=65 kind=chunks blake3=61bffcd58d3cd91de2d793af22c0a74e92fdc9e68306c8edb2889fe8e4729fef codecs=BabelAffineV1
+live v1_babel_pure.redb 626c6f636b732f6d756c7469 rev=5 len=1300 kind=chunks blake3=d43877b41b44a876a9da459d48e4bf58a580c50cd87b30a9f39030e9e3b872af codecs=BabelAffineV1,BabelAffineV1,BabelAffineV1
+live v1_babel_pure.redb 636f6465632f6172697468 rev=9 len=1280 kind=chunks blake3=dafa160d3ae2f05b8a08f70f4dcb8e1d159048f66a463c20b11ced877f6e795f codecs=BabelAffineV1,BabelAffineV1,BabelAffineV1
+live v1_babel_pure.redb 636f6465632f72616e646f6d rev=11 len=700 kind=chunks blake3=5be4270c540acfd8023cb2360372c908853e5b9540b4b0800777523279403191 codecs=BabelAffineV1,BabelAffineV1
+live v1_babel_pure.redb 636f6465632f726570656174 rev=8 len=1200 kind=chunks blake3=91c5dfdd30a447c0242417aeaf455b6b58d7a4827f9559eab857af21e72d0a62 codecs=BabelAffineV1,BabelAffineV1,BabelAffineV1
+live v1_babel_pure.redb 636f6465632f74657874 rev=10 len=2798 kind=chunks blake3=cf999e0cc387d407ba5cc6446b865d706cf054c53d9b9266337a7b3d76575442 codecs=BabelAffineV1,BabelAffineV1,BabelAffineV1,BabelAffineV1,BabelAffineV1,BabelAffineV1
+live v1_babel_pure.redb 67656e2f6172697468 rev=19 len=1600 kind=generated blake3=51432fe627dbd8df65f86d61ccb4657c407a5a3de4bf7d878ca1eb0bf586a29a codecs=-
+live v1_babel_pure.redb 67656e2f726570656174 rev=21 len=4096 kind=generated blake3=b1876b108c3a23edd0405f79a46e436fac5e610461a9450278b18223cdefb883 codecs=-
+live v1_babel_pure.redb 67656e2f786f66 rev=20 len=5000 kind=generated blake3=30cb5f76c096c960309b698cbcf529e59e7d8f4f32d275a848cd636b6889098e codecs=-
+live v1_babel_pure.redb 696e6c696e652f656d707479 rev=2 len=0 kind=inline blake3=af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262 codecs=BabelAffineV1
+live v1_babel_pure.redb 696e6c696e652f68656c6c6f rev=1 len=12 kind=inline blake3=c5cf35ba81055bb75036c75334dc28f9eedfa125939871fee82db3c13a3ed39d codecs=BabelAffineV1
+live v1_babel_pure.redb 696e6c696e652f6d6178 rev=3 len=64 kind=inline blake3=4eed7141ea4a5cd4b788606bd23f46e212af9cacebacdc7d1f4c6dc7f2511b98 codecs=BabelAffineV1
+live v1_babel_pure.redb 6f7665727772697465 rev=16 len=13 kind=inline blake3=af535d40f960c8065b981f73da9d8eeb7e1d5796939eb468927b4a33880bc3d3 codecs=BabelAffineV1
+live v1_babel_pure.redb 736f757263652f696d706f7274 rev=22 len=1500 kind=chunks blake3=da5ab13b66343e8577111d3af88e3c415d3af6aa54bb6ef10d8eaf5162cfd8f1 codecs=BabelAffineV1,BabelAffineV1,BabelAffineV1
+absent v1_babel_pure.redb 64656c65746564
+absent v1_babel_pure.redb 696d706f72742f63726173686564
+absent v1_babel_pure.redb 696d706f72742f6661696c6564
+history v1_babel_pure.redb 62696e006b6579ff rev=12 len=13 tombstone=0 current=0 blake3=0b77d43cb7e0a0ad9c253c69aab9e9d025dded4d00d1fb57b3f301158981b967
+history v1_babel_pure.redb 62696e006b6579ff rev=13 len=13 tombstone=0 current=1 blake3=9448a3b7ca2c1921d140e90f23c3e39016cb7c8587ebdc22804bff43e33906ae
+history v1_babel_pure.redb 626c6f636b732f647570 rev=6 len=1536 tombstone=0 current=1 blake3=4696d2f3ee67eb91685b20278df47a28f9df41ae858e07a324cc10100c57a51e
+history v1_babel_pure.redb 626c6f636b732f6475702d63726f7373 rev=7 len=1024 tombstone=0 current=1 blake3=f7e4f0617cdda6a9483c0cf1cb537722e7d161664a39d1e00c50197b06f9b2af
+history v1_babel_pure.redb 626c6f636b732f6d696e rev=4 len=65 tombstone=0 current=1 blake3=61bffcd58d3cd91de2d793af22c0a74e92fdc9e68306c8edb2889fe8e4729fef
+history v1_babel_pure.redb 626c6f636b732f6d756c7469 rev=5 len=1300 tombstone=0 current=1 blake3=d43877b41b44a876a9da459d48e4bf58a580c50cd87b30a9f39030e9e3b872af
+history v1_babel_pure.redb 636f6465632f6172697468 rev=9 len=1280 tombstone=0 current=1 blake3=dafa160d3ae2f05b8a08f70f4dcb8e1d159048f66a463c20b11ced877f6e795f
+history v1_babel_pure.redb 636f6465632f72616e646f6d rev=11 len=700 tombstone=0 current=1 blake3=5be4270c540acfd8023cb2360372c908853e5b9540b4b0800777523279403191
+history v1_babel_pure.redb 636f6465632f726570656174 rev=8 len=1200 tombstone=0 current=1 blake3=91c5dfdd30a447c0242417aeaf455b6b58d7a4827f9559eab857af21e72d0a62
+history v1_babel_pure.redb 636f6465632f74657874 rev=10 len=2798 tombstone=0 current=1 blake3=cf999e0cc387d407ba5cc6446b865d706cf054c53d9b9266337a7b3d76575442
+history v1_babel_pure.redb 64656c65746564 rev=17 len=700 tombstone=0 current=0 blake3=f950efa27e3a2e90a9f8a843df8b5cfd78e615584484cf4374e7cc38b0709f21
+history v1_babel_pure.redb 64656c65746564 rev=18 len=0 tombstone=1 current=1 blake3=-
+history v1_babel_pure.redb 67656e2f6172697468 rev=19 len=1600 tombstone=0 current=1 blake3=51432fe627dbd8df65f86d61ccb4657c407a5a3de4bf7d878ca1eb0bf586a29a
+history v1_babel_pure.redb 67656e2f726570656174 rev=21 len=4096 tombstone=0 current=1 blake3=b1876b108c3a23edd0405f79a46e436fac5e610461a9450278b18223cdefb883
+history v1_babel_pure.redb 67656e2f786f66 rev=20 len=5000 tombstone=0 current=1 blake3=30cb5f76c096c960309b698cbcf529e59e7d8f4f32d275a848cd636b6889098e
+history v1_babel_pure.redb 696e6c696e652f656d707479 rev=2 len=0 tombstone=0 current=1 blake3=af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262
+history v1_babel_pure.redb 696e6c696e652f68656c6c6f rev=1 len=12 tombstone=0 current=1 blake3=c5cf35ba81055bb75036c75334dc28f9eedfa125939871fee82db3c13a3ed39d
+history v1_babel_pure.redb 696e6c696e652f6d6178 rev=3 len=64 tombstone=0 current=1 blake3=4eed7141ea4a5cd4b788606bd23f46e212af9cacebacdc7d1f4c6dc7f2511b98
+history v1_babel_pure.redb 6f7665727772697465 rev=14 len=13 tombstone=0 current=0 blake3=3c9c23669609f50c13b5994dfb37b276e93a68a9baac945a6b73a53e9220ee88
+history v1_babel_pure.redb 6f7665727772697465 rev=15 len=600 tombstone=0 current=0 blake3=e17da20ce33acb4ddb0d1d7d7ab85a998359f4965d5351e510bd7304b6595b9a
+history v1_babel_pure.redb 6f7665727772697465 rev=16 len=13 tombstone=0 current=1 blake3=af535d40f960c8065b981f73da9d8eeb7e1d5796939eb468927b4a33880bc3d3
+history v1_babel_pure.redb 736f757263652f696d706f7274 rev=22 len=1500 tombstone=0 current=1 blake3=da5ab13b66343e8577111d3af88e3c415d3af6aa54bb6ef10d8eaf5162cfd8f1
+source v1_babel_pure.redb id=1 kind=1 adapter=1 location=66697874757265732f736f757263652e62696e last=22,1500,da5ab13b66343e8577111d3af88e3c415d3af6aa54bb6ef10d8eaf5162cfd8f1
+table v1_babel_pure.redb meta entries=10 blake3=fc52f07edbac6f45c8b3dc4860b46b50e411c1ae217a7b9c4e9c0596cf14fe8a
+table v1_babel_pure.redb records entries=18 blake3=3c8707a444fdc875f95bbc17f06c924fca405a40684fb4ec6e1ef044f70b5e23
+table v1_babel_pure.redb objects entries=34 blake3=3a15d7c2a1f33091b78ccce7430a5bbd57b0278e4c17be89ca034a9efbc186a3
+table v1_babel_pure.redb hash_candidates entries=0 blake3=af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262
+table v1_babel_pure.redb refcounts entries=34 blake3=eac81d0c5d4a516b8043e21eec40d22a8a3ae5ff29375d3571b110da6b848ceb
+table v1_babel_pure.redb params entries=0 blake3=af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262
+table v1_babel_pure.redb history entries=4 blake3=27c8a7dea1cc25e0d605eaed1b78b2241a1ac682c8c81e7bb90c20c49a4f92e4
+table v1_babel_pure.redb sources entries=1 blake3=8c7301cd971ceb79663ef1d71b7ed1135087723bf2d192c756b4766e0ec02290
+table v1_babel_pure.redb pending_imports entries=1 blake3=3fe4ca330866c45af161a105d04bee2047f8e475bf2979d60fdd6b5b52a9ace4
