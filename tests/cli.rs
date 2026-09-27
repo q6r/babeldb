@@ -1,10 +1,9 @@
 //! CLI, REPL, text helpers, wire protocol and TCP server.
 //!
-//! Tests that need a working engine (stubbed with `todo!()` until the engine
-//! and store branches are merged) are `#[ignore = "after merge: needs engine"]`;
-//! everything else runs now: parsing, quoting, reports, protocol framing,
-//! the server's transport paths (PING, malformed frames, shutdown) and the
-//! binary's usage errors, which must never touch the database.
+//! Covers parsing, quoting, reports, protocol framing, the server's transport
+//! paths (PING, malformed frames, shutdown, group commit, pipelining), the
+//! binary's usage errors (which must never touch the database) and end-to-end
+//! runs of the binary and the server against a real database.
 
 use std::io::Cursor;
 use std::net::TcpListener;
@@ -2054,7 +2053,6 @@ fn pseudo_random(n: usize, seed: u64) -> Vec<u8> {
 }
 
 #[test]
-#[ignore = "after merge: needs engine"]
 fn e2e_put_get_exact_bytes() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("e2e.redb");
@@ -2126,7 +2124,6 @@ fn e2e_put_get_exact_bytes() {
 }
 
 #[test]
-#[ignore = "after merge: needs engine"]
 fn e2e_import_inspect_stats_verify() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("e2e.redb");
@@ -2183,7 +2180,6 @@ fn e2e_import_inspect_stats_verify() {
 }
 
 #[test]
-#[ignore = "after merge: needs engine"]
 fn e2e_gen_scan_history_delete() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("e2e.redb");
@@ -2259,7 +2255,6 @@ fn e2e_gen_scan_history_delete() {
 }
 
 #[test]
-#[ignore = "after merge: needs engine"]
 fn e2e_creation_parameters_note() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("e2e.redb");
@@ -2305,7 +2300,6 @@ fn e2e_creation_parameters_note() {
 }
 
 #[test]
-#[ignore = "after merge: needs engine"]
 fn e2e_execute_on_memstore() {
     let mut db = mem_db();
     let mut run = |words: &[&str]| {
@@ -2339,7 +2333,6 @@ fn e2e_execute_on_memstore() {
 }
 
 #[test]
-#[ignore = "after merge: needs engine"]
 fn e2e_repl_session_on_memstore() {
     let mut db = mem_db();
     let script = "put a --value 1\nput \"b c\" --hex 00ff\nget a\nsc\nhea a\ndel a\nget a\nquit\nput z --value never\n";
@@ -2353,7 +2346,6 @@ fn e2e_repl_session_on_memstore() {
 }
 
 #[test]
-#[ignore = "after merge: needs engine"]
 fn e2e_server_roundtrip_via_client() {
     let db = Arc::new(mem_db());
     let handle = server::serve(Arc::clone(&db), "127.0.0.1:0", 2).expect("serve");
@@ -2397,7 +2389,6 @@ fn e2e_server_roundtrip_via_client() {
 }
 
 #[test]
-#[ignore = "after merge: needs engine"]
 fn e2e_serve_binary_with_client() {
     use std::io::BufRead;
     let dir = tempfile::tempdir().unwrap();

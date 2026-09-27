@@ -11,11 +11,8 @@
 //! * Codec dispatch: unknown codec and missing dependency errors.
 //! * An independent table-level validator (every table decodes with `format`,
 //!   refcounts follow the object lifetime rule, ...), exercised on `MemStore`.
-//! * Frozen databases in `tests/data`: `generate_v1_fixtures` (ignored, run once
-//!   after merge) writes them; `open_v1_fixtures` checks them forever.
-//!
-//! Tests that need code which is still being implemented are marked
-//! `#[ignore = "after merge: ..."]`.
+//! * Frozen databases in `tests/data`: `generate_v1_fixtures` (ignored; run it
+//!   only to regenerate them) writes them; `open_v1_fixtures` checks them forever.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -1412,11 +1409,10 @@ fn codec_raw_v1_body_is_the_bytes() {
 }
 
 // ===========================================================================
-// Codec bodies and generators (after merge)
+// Codec bodies and generators
 // ===========================================================================
 
 #[test]
-#[ignore = "after merge: needs the codec bodies (BabelAffineV1, RepeatV1, ArithmeticU64V1, Lz4V1, ZstdV1)"]
 fn after_merge_codec_body_goldens() {
     let arith_body = hx("0100000000000000 0200000000000000 0300000000000000");
     let arith_edge = hx("feffffffffffffff 0100000000000000 0200000000000000");
@@ -1504,7 +1500,6 @@ fn after_merge_codec_body_goldens() {
 }
 
 #[test]
-#[ignore = "after merge: needs the codec bodies (malformed bodies must fail cleanly)"]
 fn after_merge_codec_body_rejections() {
     let cases: Vec<(CodecTag, Vec<u8>, u32, &str)> = vec![
         (
@@ -1591,7 +1586,6 @@ fn after_merge_codec_body_rejections() {
 }
 
 #[test]
-#[ignore = "after merge: needs the built-in generators"]
 fn after_merge_generator_goldens() {
     let reg = generator::Registry::builtin();
     let listed: BTreeSet<(u16, u16)> = reg.list().iter().map(|&(id, v, _)| (id, v)).collect();
@@ -3989,7 +3983,7 @@ fn check_fixture(src: &Path, mode: Mode, fx: &FixtureExpect) {
 }
 
 #[test]
-#[ignore = "after merge: generates the frozen v1 fixtures (run once, then commit tests/data)"]
+#[ignore = "regenerates the frozen v1 fixtures in tests/data (run once, then commit)"]
 fn generate_v1_fixtures() {
     let dir = data_dir();
     let targets: Vec<PathBuf> = FIXTURES

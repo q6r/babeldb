@@ -754,7 +754,6 @@ fn compact_keeps_live_data_and_deletes_the_rest() {
 }
 
 #[test]
-#[ignore = "after merge: the shared conformance suite is written concurrently"]
 fn conformance_suite() {
     for layout in LAYOUTS {
         let mut dirs = Vec::new();

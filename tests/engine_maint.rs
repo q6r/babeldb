@@ -1023,7 +1023,6 @@ fn chat_samples() -> Vec<Vec<u8>> {
 }
 
 #[test]
-#[ignore = "after merge: needs RedbStore and Zstd dictionary training/codec"]
 fn trained_dictionary_is_installed_and_survives_reopen() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("dict.redb");
@@ -1072,7 +1071,6 @@ fn trained_dictionary_is_installed_and_survives_reopen() {
 }
 
 #[test]
-#[ignore = "after merge: needs RedbStore, dictionary and template training (TemplatePatchV1)"]
 fn trained_template_is_installed_next_to_the_dictionary() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("template.redb");
@@ -1110,7 +1108,6 @@ fn trained_template_is_installed_next_to_the_dictionary() {
 }
 
 #[test]
-#[ignore = "after merge: needs the engine core (Db::get / Db::get_range)"]
 fn imported_values_read_back_through_get() {
     let db = open(Config {
         import_batch_bytes: 1,
@@ -1131,7 +1128,6 @@ fn imported_values_read_back_through_get() {
 }
 
 #[test]
-#[ignore = "after merge: needs RedbStore"]
 fn imported_file_survives_reopen_on_redb() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("input.bin");
@@ -1160,7 +1156,6 @@ fn imported_file_survives_reopen_on_redb() {
 }
 
 #[test]
-#[ignore = "after merge: needs the BabelAffineV1 codec"]
 fn babel_pure_import_roundtrips() {
     let db = open(Config {
         mode: Mode::BabelPure,

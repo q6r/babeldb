@@ -1369,7 +1369,6 @@ fn quick_measurement() {
 }
 
 #[test]
-#[ignore = "after merge"]
 fn conformance_suite() {
     let mut dirs = Vec::new();
     babeldb::store::conformance::run_all(&mut || {

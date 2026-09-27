@@ -1337,7 +1337,6 @@ fn exercise<S: Store>(db: &Db<S>) {
 }
 
 #[test]
-#[ignore = "after merge: RedbStore is implemented by the store agent"]
 fn redb_roundtrip_and_reopen() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("engine.redb");
@@ -1364,7 +1363,6 @@ fn redb_roundtrip_and_reopen() {
 }
 
 #[test]
-#[ignore = "after merge: RedbStore is implemented by the store agent"]
 fn redb_concurrent_readers() {
     let dir = tempfile::tempdir().unwrap();
     let db = Arc::new(Db::open(dir.path().join("c.redb"), small_cfg()).unwrap());
@@ -1391,7 +1389,6 @@ fn redb_concurrent_readers() {
 }
 
 #[test]
-#[ignore = "after merge: BabelAffineV1 is implemented by the codec agent"]
 fn babel_pure_roundtrip() {
     let db = mem_db(Config { block_size: BS as u32, inline_max: INLINE as u32, ..Config::babel_pure() });
     exercise(&db);
@@ -1406,7 +1403,6 @@ fn babel_pure_roundtrip() {
 }
 
 #[test]
-#[ignore = "after merge: Adaptive codecs are implemented by the codec agent"]
 fn adaptive_codecs_shrink_compressible_values() {
     let db = mem_db(Config { block_size: 4096, inline_max: 256, ..Config::adaptive() });
     let text = "{\"author\":42,\"text\":\"hello there, this is a chat message\"}".repeat(300).into_bytes();
@@ -1426,7 +1422,6 @@ fn adaptive_codecs_shrink_compressible_values() {
 }
 
 #[test]
-#[ignore = "after merge: Db::verify is implemented by the maintenance agent"]
 fn verify_after_mixed_workload() {
     let db = history_db();
     exercise(&db);

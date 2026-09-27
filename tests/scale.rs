@@ -1324,7 +1324,7 @@ fn chat_readers_always_see_their_own_messages() {
 }
 
 // ---------------------------------------------------------------------------
-// Engine-backed tests (need the real engine; enable after merge)
+// Engine-backed tests (real engine, MemStore and redb)
 // ---------------------------------------------------------------------------
 
 mod engine {
@@ -1332,7 +1332,6 @@ mod engine {
     use babeldb::{Config, Db, MemStore};
 
     #[test]
-    #[ignore = "after merge: needs engine"]
     fn engine_group_commit_over_mem_db() {
         let db = Arc::new(Db::with_store(MemStore::new(), Config::default()).unwrap());
         let c = Arc::new(GroupCommitter::new(db.clone(), GroupCommitConfig::default()).unwrap());
@@ -1366,7 +1365,6 @@ mod engine {
     }
 
     #[test]
-    #[ignore = "after merge: needs engine"]
     fn engine_sharded_mem_matches_model() {
         let stores = (0..4).map(|_| MemStore::new()).collect();
         let db = ShardedDb::with_stores(
@@ -1401,7 +1399,6 @@ mod engine {
     }
 
     #[test]
-    #[ignore = "after merge: needs engine"]
     fn engine_sharded_redb_reopens_and_checks_meta() {
         let dir = tempfile::tempdir().unwrap();
         {
@@ -1454,7 +1451,6 @@ mod engine {
     }
 
     #[test]
-    #[ignore = "after merge: needs engine"]
     fn engine_chat_store_redb_end_to_end() {
         let dir = tempfile::tempdir().unwrap();
         let ids = {
