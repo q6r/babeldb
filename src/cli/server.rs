@@ -14,6 +14,15 @@
 //! fsync) instead of N. Reads run on the workers, in parallel with commits.
 //! The protocol is documented in [`crate::cli::protocol`].
 //!
+//! Every write of every connection waits for that one writer thread, and it
+//! is busy all the time once a few connections write concurrently (measured
+//! on Windows 11, localhost, durable WAL puts). Each commit wakes up the
+//! workers and clients of its batch, which the scheduler boosts on wake-up:
+//! at normal priority they preempt the writer and stretch the next commit
+//! (16 clients: typically 20-30% fewer durable puts per second, more on a
+//! busy machine), so the writer runs at a raised priority
+//! ([`ServerConfig::raise_commit_priority`]).
+//!
 //! # Acknowledgements
 //!
 //! A write is answered only after the commit carrying it returned. With
@@ -62,9 +71,10 @@ use super::protocol::{self, ProtocolError, Reply, Request};
 use crate::engine::{BatchOp, Db, Expect, Revision, ScanItem, ScanOptions};
 use crate::scale::group_commit::single_result;
 use crate::scale::{
-    GroupCommitConfig, GroupCommitStats, GroupCommitter, OpResult, OwnedOp, Ticket, WriteDurability,
+    BatchSink, GroupCommitConfig, GroupCommitStats, GroupCommitter, OpResult, OwnedOp, Ticket,
+    WriteDurability,
 };
-use crate::store::Store;
+use crate::store::{Durability, Store};
 
 /// Capacity of the per-connection read buffer.
 const READ_BUFFER: usize = 64 * 1024;
@@ -107,6 +117,9 @@ pub struct ServerConfig {
     /// (pipelined writes); at the bound the worker waits for them before
     /// submitting more.
     pub max_inflight_writes: usize,
+    /// Run the committer's writer thread at a raised priority (Windows:
+    /// `THREAD_PRIORITY_HIGHEST`; no effect elsewhere). Default `true`.
+    pub raise_commit_priority: bool,
 }
 
 impl ServerConfig {
@@ -119,6 +132,7 @@ impl ServerConfig {
                 ..GroupCommitConfig::default()
             },
             max_inflight_writes: DEFAULT_MAX_INFLIGHT_WRITES,
+            raise_commit_priority: true,
         }
     }
 
@@ -222,7 +236,11 @@ pub fn serve_with<S: Store>(
 ) -> io::Result<ServerHandle> {
     let threads = cfg.threads.max(1);
     let addr = listener.local_addr()?;
-    let committer = GroupCommitter::new(Arc::clone(&db), cfg.commit.clone()).map_err(|e| {
+    let sink = CommitSink {
+        db: Arc::clone(&db),
+        raise: AtomicBool::new(cfg.raise_commit_priority),
+    };
+    let committer = GroupCommitter::new(sink, cfg.commit.clone()).map_err(|e| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("cannot start the group committer: {e}"),
@@ -350,6 +368,50 @@ impl Drop for ServerHandle {
         let _ = self.halt();
     }
 }
+
+/// The committer's sink: the database, and on the first call (made by the
+/// writer thread, the only caller) the priority raise of that thread
+/// ([`ServerConfig::raise_commit_priority`]).
+struct CommitSink<S: Store> {
+    db: Arc<Db<S>>,
+    /// The raise is still to be done.
+    raise: AtomicBool,
+}
+
+impl<S: Store> CommitSink<S> {
+    fn prepare(&self) {
+        if self.raise.load(Ordering::Relaxed) && self.raise.swap(false, Ordering::Relaxed) {
+            raise_current_thread_priority();
+        }
+    }
+}
+
+impl<S: Store> BatchSink for CommitSink<S> {
+    fn apply(&self, ops: &[OwnedOp], durability: Durability) -> crate::Result<Vec<OpResult>> {
+        self.prepare();
+        BatchSink::apply(&*self.db, ops, durability)
+    }
+
+    fn sync(&self) -> crate::Result<()> {
+        self.prepare();
+        BatchSink::sync(&*self.db)
+    }
+}
+
+#[cfg(windows)]
+fn raise_current_thread_priority() {
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_HIGHEST,
+    };
+    // SAFETY: the pseudo handle of the calling thread is always valid; a
+    // failure leaves the priority as it was.
+    unsafe {
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+    }
+}
+
+#[cfg(not(windows))]
+fn raise_current_thread_priority() {}
 
 /// Address to connect to in order to reach a listener bound to `addr`.
 fn wake_addr(mut addr: SocketAddr) -> SocketAddr {
