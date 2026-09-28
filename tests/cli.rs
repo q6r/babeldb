@@ -7,6 +7,7 @@
 
 use std::io::Cursor;
 use std::net::TcpListener;
+use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::process::{Command as Process, Output, Stdio};
 use std::sync::Arc;
@@ -30,7 +31,7 @@ use babeldb::maintenance::VerifyReport;
 use babeldb::planner::PlannerSnapshot;
 use babeldb::scale::WriteDurability;
 use babeldb::stats::{CodecUsage, EngineCountersSnapshot, FileSize, Stats};
-use babeldb::{Config, Db, Expect, MemStore, ScanItem};
+use babeldb::{Config, Db, Expect, MemStore, ScanItem, ScanOptions};
 use proptest::prelude::*;
 
 // ---------------------------------------------------------------------------
@@ -1486,6 +1487,26 @@ fn read_frame_validates_before_allocating() {
     assert!(read_frame(&mut reader, &mut body).unwrap());
     assert_eq!(Request::decode(&body).unwrap(), Request::Ping);
     assert!(!read_frame(&mut reader, &mut body).unwrap());
+
+    // read_frame_reuse keeps its buffer: the body is buf[..len].
+    let mut stream = Vec::new();
+    write_frame(&mut stream, &[op::PING; 10]).unwrap();
+    write_frame(&mut stream, &[op::GET; 3]).unwrap();
+    let mut reader = Cursor::new(stream);
+    let mut buf = Vec::new();
+    assert_eq!(
+        protocol::read_frame_reuse(&mut reader, &mut buf).unwrap(),
+        Some(10)
+    );
+    assert_eq!(
+        protocol::read_frame_reuse(&mut reader, &mut buf).unwrap(),
+        Some(3)
+    );
+    assert_eq!((&buf[..3], buf.len()), (&[op::GET; 3][..], 10));
+    assert_eq!(
+        protocol::read_frame_reuse(&mut reader, &mut buf).unwrap(),
+        None
+    );
 }
 
 #[test]
@@ -1512,6 +1533,239 @@ fn oversized_messages_are_refused_when_encoding() {
     assert!(out.is_empty());
 }
 
+#[test]
+fn scan_range_requests_and_pages_roundtrip() {
+    let bounds = [
+        Bound::Unbounded,
+        Bound::Included(&b"a"[..]),
+        Bound::Excluded(&b""[..]),
+        Bound::Included(&b"\xff\x00"[..]),
+    ];
+    for start in bounds {
+        for end in bounds {
+            for (limit, reverse, with_values) in [(0, false, true), (u32::MAX, true, false)] {
+                roundtrip_request(&Request::ScanRange {
+                    start,
+                    end,
+                    limit,
+                    reverse,
+                    with_values,
+                });
+            }
+        }
+    }
+    // Exact layout: len | op | start (tag, key) | end (tag) | limit | reverse | with_values.
+    let mut frame = Vec::new();
+    Request::ScanRange {
+        start: Bound::Excluded(b"k"),
+        end: Bound::Unbounded,
+        limit: 7,
+        reverse: true,
+        with_values: false,
+    }
+    .encode(&mut frame)
+    .unwrap();
+    assert_eq!(
+        frame,
+        [
+            14,
+            0,
+            0,
+            0,
+            op::SCAN_RANGE,
+            2,
+            1,
+            0,
+            0,
+            0,
+            b'k',
+            0,
+            7,
+            0,
+            0,
+            0,
+            1,
+            0
+        ]
+    );
+    assert_eq!(op::name(op::SCAN_RANGE), "SCAN_RANGE");
+
+    let item = |k: &[u8], v: Option<&[u8]>| ScanItem {
+        key: k.to_vec(),
+        revision: 3,
+        logical_len: v.map_or(5, |v| v.len() as u64),
+        value: v.map(<[u8]>::to_vec),
+    };
+    roundtrip_reply(
+        op::SCAN_RANGE,
+        &Reply::Page {
+            items: vec![],
+            more: false,
+        },
+    );
+    roundtrip_reply(
+        op::SCAN_RANGE,
+        &Reply::Page {
+            items: vec![item(b"a", None), item(b"b", Some(&[7; 5000]))],
+            more: true,
+        },
+    );
+    assert!(matches!(
+        Request::decode(&[op::SCAN_RANGE, 3]),
+        Err(ProtocolError::Malformed(m)) if m.contains("start must be 0 (unbounded)")
+    ));
+    assert!(matches!(
+        Request::decode(&[op::SCAN_RANGE, 0, 1, 1, 0, 0, 0]),
+        Err(ProtocolError::Malformed(m)) if m.contains("end needs 1 bytes")
+    ));
+    assert!(matches!(
+        Reply::decode(op::SCAN_RANGE, &[0, 2, 0, 0, 0, 0]),
+        Err(ProtocolError::Malformed(m)) if m.contains("more must be 0 or 1")
+    ));
+    // A SCAN_PREFIX reply (no `more`) does not decode as a page.
+    assert!(matches!(
+        Reply::decode(op::SCAN_RANGE, &[0, 0, 0, 0, 0]),
+        Err(ProtocolError::Malformed(_))
+    ));
+}
+
+#[test]
+fn spliced_frames_match_plain_encoding() {
+    let sizes = [0, 1, protocol::SPLICE_MIN - 1, protocol::SPLICE_MIN, 70_000];
+    let values: Vec<Vec<u8>> = sizes.iter().map(|&n| pseudo_random(n, n as u64)).collect();
+    let flatten = |out: &[u8], spliced: &[(usize, &[u8])]| {
+        let mut wire = Vec::new();
+        protocol::write_spliced(&mut wire, out, spliced).unwrap();
+        wire
+    };
+    let items: Vec<(&[u8], &[u8])> = values.iter().map(|v| (&b"k"[..], &v[..])).collect();
+    let mut requests: Vec<Request<'_>> = values
+        .iter()
+        .map(|v| Request::Put {
+            key: b"key",
+            value: v,
+        })
+        .collect();
+    requests.push(Request::PutBatch { items });
+    requests.push(Request::Get { key: b"g" });
+    for request in &requests {
+        let mut plain = vec![9u8];
+        request.encode(&mut plain).unwrap();
+        // Offsets are positions in `out`, whatever it held before.
+        let (mut out, mut spliced) = (vec![9u8], Vec::new());
+        request.encode_spliced(&mut out, &mut spliced).unwrap();
+        assert_eq!(flatten(&out, &spliced), plain, "{}", op::name(request.op()));
+        let large = match request {
+            Request::Put { value, .. } => usize::from(value.len() >= protocol::SPLICE_MIN),
+            Request::PutBatch { items } => items
+                .iter()
+                .filter(|(_, v)| v.len() >= protocol::SPLICE_MIN)
+                .count(),
+            _ => 0,
+        };
+        assert_eq!(spliced.len(), large);
+    }
+
+    let scan: Vec<ScanItem> = values
+        .iter()
+        .enumerate()
+        .map(|(i, v)| ScanItem {
+            key: vec![i as u8],
+            revision: i as u64,
+            logical_len: v.len() as u64,
+            value: (i != 1).then(|| v.clone()),
+        })
+        .collect();
+    let replies = [
+        Reply::Value(values[4].clone()),
+        Reply::Value(Vec::new()),
+        Reply::Items(scan.clone()),
+        Reply::Page {
+            items: scan,
+            more: true,
+        },
+        Reply::Revision(5),
+        Reply::NotFound,
+        Reply::Error("e".into()),
+    ];
+    for reply in replies {
+        let mut plain = Vec::new();
+        reply.encode(&mut plain).unwrap();
+        let (mut out, mut spliced) = (Vec::new(), Vec::new());
+        let kind = reply.kind();
+        reply.encode_spliced(&mut out, &mut spliced).unwrap();
+        let mut wire = Vec::new();
+        protocol::write_spliced(&mut wire, &out, &spliced).unwrap();
+        assert_eq!(wire, plain, "{kind}");
+    }
+
+    // A frame refused for its total length leaves both buffers as they were.
+    let half = vec![0u8; MAX_FRAME_LEN as usize / 2 + 1];
+    let batch = Request::PutBatch {
+        items: vec![(&b"a"[..], &half[..]), (&b"b"[..], &half[..])],
+    };
+    let (mut out, mut spliced) = (vec![1u8], vec![(0usize, &b"x"[..])]);
+    assert!(matches!(
+        batch.encode_spliced(&mut out, &mut spliced),
+        Err(ProtocolError::FrameTooLarge { .. })
+    ));
+    assert_eq!((out, spliced), (vec![1u8], vec![(0usize, &b"x"[..])]));
+}
+
+#[test]
+fn read_reply_reads_values_in_place() {
+    // A value larger than the 1 MiB first allocation is read in growing steps.
+    let big = pseudo_random(3 << 20, 7);
+    let replies = [
+        (op::GET, Reply::Value(big.clone())),
+        (
+            op::SCAN_RANGE,
+            Reply::Page {
+                items: vec![ScanItem {
+                    key: b"k".to_vec(),
+                    revision: 1,
+                    logical_len: 5000,
+                    value: Some(vec![3; 5000]),
+                }],
+                more: true,
+            },
+        ),
+        (op::PING, Reply::Done),
+        (op::GET, Reply::Error("bad \u{e9}".into())),
+        (op::DELETE, Reply::NotFound),
+    ];
+    let mut stream = Vec::new();
+    for (_, reply) in &replies {
+        reply.encode(&mut stream).unwrap();
+    }
+    let mut reader = Cursor::new(stream);
+    for (op, reply) in &replies {
+        assert_eq!(
+            &protocol::read_reply(&mut reader, *op).unwrap().unwrap(),
+            reply
+        );
+    }
+    assert!(
+        protocol::read_reply(&mut reader, op::PING)
+            .unwrap()
+            .is_none()
+    );
+    // A frame cut short is truncated (not malformed); trailing bytes are malformed.
+    let mut frame = Vec::new();
+    Reply::Value(big).encode(&mut frame).unwrap();
+    frame.truncate(frame.len() - 1);
+    assert!(matches!(
+        protocol::read_reply(&mut Cursor::new(frame), op::GET),
+        Err(ProtocolError::Truncated)
+    ));
+    let mut frame = Vec::new();
+    write_frame(&mut frame, &[0, 1, 2]).unwrap();
+    assert!(matches!(
+        protocol::read_reply(&mut Cursor::new(frame), op::PING),
+        Err(ProtocolError::Malformed(m)) if m.contains("2 trailing bytes")
+    ));
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(1024))]
 
@@ -1520,6 +1774,11 @@ proptest! {
         let _ = Request::decode(&bytes);
         let _ = Reply::decode(reply_op, &bytes);
         let _ = decode_frame(&bytes);
+        // Decoding straight from the stream gives what decoding the frame gives.
+        let streamed = protocol::read_reply(&mut &bytes[..], reply_op);
+        if let Ok((body, _)) = decode_frame(&bytes) {
+            prop_assert_eq!(streamed.ok().flatten(), Reply::decode(reply_op, body).ok());
+        }
         let mut reader = Cursor::new(bytes.clone());
         let mut body = Vec::new();
         for _ in 0..8 {
@@ -1542,6 +1801,12 @@ proptest! {
         roundtrip_request(&Request::Range { key: &key, offset, len: offset.rotate_left(7) });
         roundtrip_request(&Request::ScanPrefix { prefix: &key, limit, reverse: flags.0, with_values: flags.1 });
         roundtrip_request(&Request::PutBatch { items: vec![(&key[..], &value[..]), (&value[..], &key[..])] });
+        let (start, end) = match limit % 3 {
+            0 => (Bound::Unbounded, Bound::Included(&value[..])),
+            1 => (Bound::Included(&key[..]), Bound::Excluded(&value[..])),
+            _ => (Bound::Excluded(&key[..]), Bound::Unbounded),
+        };
+        roundtrip_request(&Request::ScanRange { start, end, limit, reverse: flags.0, with_values: flags.1 });
         let items = vec![ScanItem { key: key.clone(), revision: offset, logical_len: value.len() as u64, value: flags.1.then(|| value.clone()) }];
         roundtrip_reply(op::SCAN_PREFIX, &Reply::Items(items));
     }
@@ -1897,6 +2162,209 @@ fn client_pipeline_windows_large_bursts() {
     assert!(matches!(c.recv(), Err(ProtocolError::Io(_))));
     c.ping().unwrap();
     assert_eq!(handle.stop().requests, 2002);
+}
+
+#[test]
+fn server_scan_range_matches_db_scan() {
+    let db = Arc::new(mem_db());
+    for i in 0..20u8 {
+        db.put(
+            format!("k{i:02}").as_bytes(),
+            &vec![i; 10 + i as usize],
+            Expect::Any,
+        )
+        .unwrap();
+    }
+    // Deleted records are skipped.
+    db.delete(b"k07", Expect::Any).unwrap();
+    let handle = server::serve(Arc::clone(&db), "127.0.0.1:0", 2).expect("serve");
+    let mut c = client(handle.local_addr());
+    let key = |s: &str| s.as_bytes().to_vec();
+    let bounds = [
+        Bound::Unbounded,
+        Bound::Included(key("k05")),
+        Bound::Excluded(key("k05")),
+        Bound::Included(key("k12")),
+        Bound::Excluded(key("k99")),
+        Bound::Included(key("a")),
+    ];
+    for start in &bounds {
+        for end in &bounds {
+            for (limit, reverse, with_values) in [
+                (0, false, true),
+                (3, false, false),
+                (0, true, true),
+                (4, true, true),
+                (100, false, true),
+            ] {
+                let mut opts = ScanOptions::all()
+                    .limit(limit)
+                    .reverse(reverse)
+                    .with_values(with_values);
+                opts.start = start.clone();
+                opts.end = end.clone();
+                assert_eq!(c.scan(&opts).unwrap(), db.scan(&opts).unwrap(), "{opts:?}");
+            }
+        }
+    }
+    // Start after end: empty.
+    let mut backwards = ScanOptions::all().with_values(true);
+    backwards.start = Bound::Included(key("k10"));
+    backwards.end = Bound::Excluded(key("k02"));
+    assert!(c.scan(&backwards).unwrap().is_empty());
+    // One raw request: the whole result in one page.
+    let request = Request::ScanRange {
+        start: Bound::Included(b"k18"),
+        end: Bound::Unbounded,
+        limit: 0,
+        reverse: false,
+        with_values: true,
+    };
+    match c.call(&request).unwrap() {
+        Reply::Page { items, more } => {
+            assert!(!more);
+            let keys: Vec<&[u8]> = items.iter().map(|i| i.key.as_slice()).collect();
+            assert_eq!(keys, [&b"k18"[..], b"k19"]);
+            assert_eq!(items[1].value.as_deref(), Some(&[19u8; 29][..]));
+        }
+        other => panic!("{other:?}"),
+    }
+    // A malformed bound gets an ERROR; the connection stays usable.
+    let mut frame = Vec::new();
+    write_frame(&mut frame, &[op::SCAN_RANGE, 5]).unwrap();
+    let body = c.send_raw(&frame).unwrap().expect("reply");
+    assert!(error_message(&body).contains("start must be 0"));
+    c.ping().unwrap();
+    assert_eq!(handle.stop().error_replies, 1);
+    // An empty database.
+    let empty = server::serve(Arc::new(mem_db()), "127.0.0.1:0", 1).expect("serve");
+    let all = ScanOptions::all().with_values(true);
+    assert!(client(empty.local_addr()).scan(&all).unwrap().is_empty());
+    empty.stop();
+}
+
+#[test]
+fn server_scan_range_splits_large_results_into_pages() {
+    let db = Arc::new(mem_db());
+    // 20 KiB values (sent from their buffers), two of 1.5 MiB (read in
+    // growing steps), then small ones.
+    for i in 0..16u8 {
+        let len = match i {
+            5 | 11 => 3 << 19,
+            0..=11 => 20 << 10,
+            _ => 100,
+        };
+        db.put(&[b'v', i], &pseudo_random(len, u64::from(i)), Expect::Any)
+            .unwrap();
+    }
+    let mut cfg = ServerConfig::new(2);
+    cfg.scan_page_bytes = 64 << 10;
+    let handle = serve_config(Arc::clone(&db), cfg);
+    let mut c = client(handle.local_addr());
+    for (limit, reverse) in [(0, false), (0, true), (9, false), (7, true)] {
+        let opts = ScanOptions::prefix(b"v")
+            .limit(limit)
+            .reverse(reverse)
+            .with_values(true);
+        let before = handle.stats().requests;
+        assert_eq!(c.scan(&opts).unwrap(), db.scan(&opts).unwrap(), "{opts:?}");
+        assert!(handle.stats().requests - before > 2, "pages of {opts:?}");
+    }
+    // A page holds at most 64 KiB of items, or one larger item; `more` asks
+    // for the next one.
+    let mut page = |start: Bound<&[u8]>| {
+        let request = Request::ScanRange {
+            start,
+            end: Bound::Unbounded,
+            limit: 0,
+            reverse: false,
+            with_values: true,
+        };
+        match c.call(&request).unwrap() {
+            Reply::Page { items, more } => (items, more),
+            other => panic!("{other:?}"),
+        }
+    };
+    let (items, more) = page(Bound::Unbounded);
+    assert!(more);
+    assert_eq!(items.len(), 3, "3 x 20 KiB fit in 64 KiB, 4 do not");
+    let (items, more) = page(Bound::Excluded(&[b'v', 4]));
+    assert!(more);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].value.as_ref().map(Vec::len), Some(3 << 19));
+    let (items, more) = page(Bound::Included(&[b'v', 12]));
+    assert!(!more);
+    assert_eq!(items.len(), 4);
+    // Keys only: small items, one page.
+    let before = handle.stats().requests;
+    let keys = c.scan(&ScanOptions::prefix(b"v")).unwrap();
+    assert_eq!(keys.len(), 16);
+    assert!(keys.iter().all(|i| i.value.is_none()));
+    assert_eq!(handle.stats().requests - before, 1);
+    handle.stop();
+}
+
+#[test]
+fn server_scan_range_refuses_an_item_larger_than_a_frame() {
+    let db = Arc::new(Db::with_store(MemStore::new(), Config::raw_only()).expect("db"));
+    db.put(b"a-small", b"x", Expect::Any).unwrap();
+    db.put(b"b-huge", &vec![7u8; MAX_FRAME_LEN as usize], Expect::Any)
+        .unwrap();
+    let handle = server::serve(Arc::clone(&db), "127.0.0.1:0", 1).expect("serve");
+    let mut c = client(handle.local_addr());
+    match c.scan(&ScanOptions::all().with_values(true)) {
+        Err(ProtocolError::Remote(m)) => assert!(m.contains("does not fit in a frame"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+    // Without values, or before that item, the scan works.
+    assert_eq!(c.scan(&ScanOptions::all()).unwrap().len(), 2);
+    let first = ScanOptions::all().with_values(true).limit(1);
+    assert_eq!(c.scan(&first).unwrap(), db.scan(&first).unwrap());
+    handle.stop();
+}
+
+#[test]
+fn server_moves_large_values_intact() {
+    let db = Arc::new(mem_db());
+    let handle = server::serve(Arc::clone(&db), "127.0.0.1:0", 2).expect("serve");
+    let mut c = client(handle.local_addr());
+    // 3 MiB: frames larger than the first 1 MiB allocation of a reader.
+    let big = pseudo_random(3 << 20, 1);
+    let mid = pseudo_random(protocol::SPLICE_MIN, 2);
+    let small = pseudo_random(protocol::SPLICE_MIN - 1, 3);
+    c.put(b"big", &big).unwrap();
+    assert_eq!(db.get(b"big").unwrap().as_deref(), Some(&big[..]));
+    assert_eq!(c.get(b"big").unwrap().as_deref(), Some(&big[..]));
+    let batch = [
+        (&b"mid"[..], &mid[..]),
+        (&b"small"[..], &small[..]),
+        (&b"big2"[..], &big[..]),
+    ];
+    assert_eq!(c.put_batch(&batch).unwrap().len(), 3);
+    for (k, v) in batch {
+        assert_eq!(c.get(k).unwrap().as_deref(), Some(v));
+    }
+    // Pipelined replies mixing large and small values keep their order.
+    let keys: [&[u8]; 4] = [b"big", b"small", b"missing", b"mid"];
+    let values = c.get_many(&keys).unwrap();
+    assert_eq!(
+        values,
+        [
+            Some(big.clone()),
+            Some(small.clone()),
+            None,
+            Some(mid.clone())
+        ]
+    );
+    let items = c.scan_prefix(b"", 0, false, true).unwrap();
+    let keys: Vec<&[u8]> = items.iter().map(|i| i.key.as_slice()).collect();
+    assert_eq!(keys, [&b"big"[..], b"big2", b"mid", b"small"]);
+    assert_eq!(items[1].value.as_deref(), Some(&big[..]));
+    let stats = handle.stop();
+    // Large values count in the traffic although they skip the buffers.
+    assert!(stats.bytes_in > 2 * big.len() as u64, "{stats:?}");
+    assert!(stats.bytes_out > 5 * big.len() as u64, "{stats:?}");
+    assert_eq!(stats.error_replies, 0);
 }
 
 // ---------------------------------------------------------------------------

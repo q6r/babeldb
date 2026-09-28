@@ -62,8 +62,8 @@
 //! - `range` / `range-mt` (read threads as `get`): the messages of a channel between two ids,
 //!   `RANGE_N` (200) from a random position, oldest first (`id BETWEEN $2 AND $3 ORDER BY id`, an
 //!   `_id` range, a babeldb scan with included bounds); channels weighted by message count; checked
-//!   for exact ids and order, every 64th payload compared. In-process babeldb only: the babeldb TCP
-//!   protocol has no key-range scan (only SCAN_PREFIX), its systems print `skipped`.
+//!   for exact ids and order, every 64th payload compared. The babeldb TCP systems run the same scan
+//!   with the protocol's SCAN_RANGE (`Client::scan`); `tcp-floor` prints `skipped`.
 //! - `mixed95` / `mixed50`: `--mixed-threads` clients, each op a read with 95 / 50 % probability
 //!   (a point `get` 3 times in 4, a `latest` scan otherwise) or else a durable put of a new message;
 //!   rows `mixedNN` (every op: aggregate ops/s), `mixedNN-read` and `mixedNN-write` (the same run,
@@ -492,7 +492,7 @@ trait Target: Sync {
     fn pipelines(&self) -> bool {
         false
     }
-    /// Whether sessions have `range` (the babeldb TCP protocol has no key-range scan).
+    /// Whether sessions have `range` (`tcp-floor` answers no key-range scan).
     fn ranges(&self) -> bool {
         true
     }
@@ -920,6 +920,13 @@ impl Session for BabelTcpSession {
         let refs: Vec<&[u8]> = keys.iter().map(|k| &k[..]).collect();
         Ok(self.client.get_many(&refs)?)
     }
+
+    fn range(&mut self, channel: u64, from: u64, to: u64) -> R<Vec<(u64, Vec<u8>)>> {
+        let mut opts = ScanOptions::all().with_values(true);
+        opts.start = Bound::Included(message_key(channel, from).to_vec());
+        opts.end = Bound::Included(message_key(channel, to).to_vec());
+        Ok(latest_pairs(self.client.scan(&opts)?))
+    }
 }
 
 /// (message id, payload) of scanned `channel BE || id BE` items.
@@ -976,10 +983,6 @@ impl<S: Store> Target for BabelTarget<S> {
 
     fn pipelines(&self) -> bool {
         self.server.is_some()
-    }
-
-    fn ranges(&self) -> bool {
-        self.server.is_none()
     }
 
     fn close(mut self: Box<Self>) -> R<()> {
@@ -1716,7 +1719,7 @@ fn range_phases(p: &Params, name: &str, target: &dyn Target, report: &mut Report
         return Ok(());
     }
     if !target.ranges() {
-        println!("[{name}] range      skipped: the babeldb TCP protocol has no key-range scan (SCAN_PREFIX only)");
+        println!("[{name}] range      skipped: no key-range scan on this system");
         return Ok(());
     }
     // loaded messages of each channel, oldest first
