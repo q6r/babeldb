@@ -1,7 +1,11 @@
 //! Typed transactional helpers shared by the engine, ingestion and maintenance.
 //! Object lifetime rule: every manifest reference (current record, retained
 //! history, pending import) holds one refcount; an object is removed together
-//! with its hash candidate and refcount row when the count reaches zero.
+//! with its refcount row when the count reaches zero, without reading it.
+//! Its id may stay in its `hash_candidates` list (the list's key is the
+//! object's digest, which only its envelope holds): object ids are never
+//! reused, so such a stale id never names another object; dedupe skips it
+//! and drops it when it rewrites that list, and `gc` sweeps the rest.
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -273,6 +277,38 @@ pub fn alloc_revision<W: WriteTxn + ?Sized>(w: &mut W) -> Result<u64> {
     alloc_id(w, meta_key::NEXT_REVISION, "revision")
 }
 
+/// Object ids handed out inside one write transaction: `next_object_id` is
+/// read on the first allocation and written back once, by `finish`, which
+/// must run before the transaction commits (an aborted transaction leaves
+/// the counter as it was, and none of its ids was ever stored).
+#[derive(Debug, Default)]
+pub struct ObjectIds {
+    next: Option<u64>,
+}
+
+impl ObjectIds {
+    pub fn alloc<T: ReadTxn + ?Sized>(&mut self, t: &T) -> Result<u64> {
+        let next = match self.next {
+            Some(n) => n,
+            None => get_meta_u64(t, meta_key::NEXT_OBJECT_ID)?
+                .ok_or_else(|| Error::format(format!("missing meta counter {}", meta_key::NEXT_OBJECT_ID)))?,
+        };
+        if next == u64::MAX {
+            return Err(Error::IdExhausted("object id"));
+        }
+        self.next = Some(next + 1);
+        Ok(next)
+    }
+
+    /// Persist the counter (nothing to write when no id was allocated).
+    pub fn finish<W: WriteTxn + ?Sized>(&self, w: &mut W) -> Result<()> {
+        match self.next {
+            Some(next) => put_meta_u64(w, meta_key::NEXT_OBJECT_ID, next),
+            None => Ok(()),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Manifests
 // ---------------------------------------------------------------------------
@@ -299,8 +335,8 @@ pub fn incref<W: WriteTxn + ?Sized>(w: &mut W, id: u64) -> Result<u64> {
     Ok(n)
 }
 
-/// Drop one reference. At zero the object, its candidate entry and its
-/// refcount row are removed. Returns whether the object was removed.
+/// Drop one reference. At zero the object and its refcount row are removed
+/// (`remove_object`). Returns whether the object was removed.
 pub fn decref<W: WriteTxn + ?Sized>(w: &mut W, id: u64) -> Result<bool> {
     let n = get_refcount(w, id)?;
     match n {
@@ -316,14 +352,13 @@ pub fn decref<W: WriteTxn + ?Sized>(w: &mut W, id: u64) -> Result<bool> {
     }
 }
 
-/// Remove an object with its candidate entry and refcount row (no checks).
+/// Remove an object and its refcount row (no checks), without reading the
+/// object: its id stays in its candidate list, if any, as a stale id (see
+/// the module documentation).
 pub fn remove_object<W: WriteTxn + ?Sized>(w: &mut W, id: u64) -> Result<()> {
-    if let Some(env) = w.get(Table::Objects, &id_key(id))? {
-        let (h, _) = format::read_envelope(&env)?;
-        remove_candidate(w, &h.digest, h.raw_len, id)?;
-        w.remove(Table::Objects, &id_key(id))?;
-    }
-    w.remove(Table::Refcounts, &id_key(id))?;
+    let key = id_key(id);
+    w.remove(Table::Objects, &key)?;
+    w.remove(Table::Refcounts, &key)?;
     Ok(())
 }
 
@@ -369,7 +404,28 @@ pub fn store_unit<W: WriteTxn + ?Sized>(
     dedupe: bool,
     params: &ParamCache,
 ) -> Result<(u64, bool)> {
+    let mut ids = ObjectIds::default();
+    let stored = store_unit_with(w, unit, raw, dedupe, params, &mut ids)?;
+    ids.finish(w)?;
+    Ok(stored)
+}
+
+/// `store_unit` taking a new object's id from `ids` (whose `finish` the
+/// caller runs before committing). A new object costs one read (its
+/// candidate list, with dedupe) and three writes: the object, its refcount
+/// row (1: the id is new, so there is no row to read) and its candidate
+/// list, rewritten without the stale ids found while comparing.
+pub fn store_unit_with<W: WriteTxn + ?Sized>(
+    w: &mut W,
+    unit: &PreparedUnit,
+    raw: &[u8],
+    dedupe: bool,
+    params: &ParamCache,
+    ids: &mut ObjectIds,
+) -> Result<(u64, bool)> {
     debug_assert_eq!(raw.len(), unit.raw_len as usize);
+    // Candidates whose object exists (with dedupe).
+    let mut live = Vec::new();
     if dedupe {
         let mut bytes = Vec::new();
         for cand in candidates(w, &unit.digest, unit.raw_len)? {
@@ -381,15 +437,18 @@ pub fn store_unit<W: WriteTxn + ?Sized>(
                     incref(w, cand)?;
                     return Ok((cand, true));
                 }
+                live.push(cand);
             }
         }
     }
-    let id = alloc_id(w, meta_key::NEXT_OBJECT_ID, "object id")?;
-    w.put(Table::Objects, &id_key(id), &unit.envelope)?;
+    let id = ids.alloc(&*w)?;
+    let key = id_key(id);
+    w.put(Table::Objects, &key, &unit.envelope)?;
+    w.put(Table::Refcounts, &key, &format::encode_u64(1))?;
     if dedupe {
-        add_candidate(w, &unit.digest, unit.raw_len, id)?;
+        live.push(id);
+        w.put(Table::HashCandidates, &format::candidate_key(&unit.digest, unit.raw_len), &format::encode_id_list(&live))?;
     }
-    incref(w, id)?;
     Ok((id, false))
 }
 

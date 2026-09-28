@@ -47,8 +47,9 @@ banco não é permitido, para não contaminar a comparação.
 | `BabelPure` | a seed da bijeção afim `seed = ((x − 1) · 5⁻¹) mod 2^(8n)`, com `x = (5 · seed + 1) mod 2^(8n)` na leitura (n bytes, big-endian) | demonstrar endereçamento reversível sem busca | igual a "motor + Raw" — nunca menor que os dados |
 | `Adaptive` | a menor representação exata entre receitas (`RepeatV1`, `ArithmeticU64V1`), `RawV1`, LZ4, Zstd (com dicionário opcional) e templates, mais deduplicação de blocos com verificação byte a byte | economia real com custo de leitura controlado | medido em bytes alocados, metadados incluídos |
 
-Valores até `inline_max` ficam dentro do manifesto; valores maiores são
-divididos em blocos de `block_size` bytes. Registros descritos por um gerador
+Valores até `inline_max` (padrão 16 KiB, o tamanho padrão de bloco) ficam
+dentro do manifesto; valores maiores são divididos em blocos de `block_size`
+bytes. Registros descritos por um gerador
 registrado (`put_generated`, comando `gen`) guardam só o id do gerador, os
 parâmetros e um digest.
 

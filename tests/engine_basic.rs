@@ -62,7 +62,8 @@ fn object_ids<S: Store>(db: &Db<S>, key: &[u8]) -> Vec<u64> {
 }
 
 /// Recount every reference held by `records` + `history` and compare it with
-/// `refcounts`, `objects` and `hash_candidates`.
+/// `refcounts`, `objects` and `hash_candidates` (where ids of released
+/// objects may stay as stale ids).
 fn check_invariants<S: Store>(db: &Db<S>) {
     let r = db.store().begin_read().unwrap();
     let all = (Bound::Unbounded, Bound::Unbounded);
@@ -91,12 +92,20 @@ fn check_invariants<S: Store>(db: &Db<S>) {
     })
     .unwrap();
     assert!(objects.keys().eq(refs.keys()), "stored objects differ from referenced objects");
+    let next_object_id = r.get(Table::Meta, format::meta_key::NEXT_OBJECT_ID.as_bytes()).unwrap().unwrap();
+    let next_object_id = format::decode_u64(&next_object_id).unwrap();
     let mut listed = 0usize;
     r.scan(Table::HashCandidates, all.0, all.1, false, &mut |k: &[u8], v: &[u8]| {
         for id in format::decode_id_list(v)? {
-            let (digest, raw_len) = objects.get(&id).expect("candidate points to a missing object");
-            assert_eq!(k, format::candidate_key(digest, *raw_len).as_slice());
-            listed += 1;
+            match objects.get(&id) {
+                Some((digest, raw_len)) => {
+                    assert_eq!(k, format::candidate_key(digest, *raw_len).as_slice());
+                    listed += 1;
+                }
+                // A released object (unreferenced: objects == references above);
+                // ids are never reused, so it is below the counter.
+                None => assert!(id != 0 && id < next_object_id, "candidate {id} can name a future object"),
+            }
         }
         Ok(true)
     })
@@ -365,7 +374,8 @@ fn dedupe_within_one_value() {
     check_invariants(&db);
     assert!(db.delete(b"k", Expect::Any).unwrap());
     let s = db.stats().unwrap();
-    assert_eq!((s.objects, s.hash_candidates, s.refcount_bytes), (0, 0, 0));
+    // The two released ids stay in their candidate lists (stale, until gc).
+    assert_eq!((s.objects, s.hash_candidates, s.refcount_bytes), (0, 2, 0));
     check_invariants(&db);
 }
 
@@ -393,7 +403,8 @@ fn dedupe_across_keys_and_release() {
 
     put_any(&db, b"k1", b"small");
     let s = db.stats().unwrap();
-    assert_eq!((s.objects, s.hash_candidates, s.refcount_bytes, s.candidate_bytes), (0, 0, 0, 0));
+    // a, b and c are released; their ids stay as stale candidates.
+    assert_eq!((s.objects, s.hash_candidates, s.refcount_bytes, s.candidate_bytes), (0, 3, 0, 3 * (36 + 8)));
     check_invariants(&db);
     assert_eq!(db.get(b"k1").unwrap().as_deref(), Some(&b"small"[..]));
 }
@@ -923,7 +934,8 @@ fn stats_are_consistent() {
     assert_eq!(s.inline_envelope_bytes, 74 + 64);
     assert_eq!(s.objects, 3);
     assert_eq!(s.object_bytes, 3 * (8 + 64) + 2 * BS as u64 + 100);
-    assert_eq!((s.hash_candidates, s.candidate_bytes), (3, 3 * (36 + 8)));
+    // 3 stored objects + the stale ids of the 3 released blocks of "gone".
+    assert_eq!((s.hash_candidates, s.candidate_bytes), (6, 6 * (36 + 8)));
     assert_eq!(s.refcount_bytes, 3 * 16);
     assert_eq!((s.params, s.param_bytes, s.history_entries, s.history_bytes), (0, 0, 0, 0));
     assert_eq!((s.sources, s.source_bytes, s.pending_imports, s.pending_import_bytes), (0, 0, 0, 0));

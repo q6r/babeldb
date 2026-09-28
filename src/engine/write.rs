@@ -169,6 +169,9 @@ type OpResult<T> = std::result::Result<T, OpError>;
 struct TxnCtx {
     /// Next revision to persist in `meta`: loaded on first use, written once.
     next_revision: Option<u64>,
+    /// Object ids of the new objects: the counter is read once and written
+    /// once, in `commit_txn`.
+    object_ids: ops::ObjectIds,
     /// Objects removed by the transaction (evicted from the cache after commit).
     removed: Vec<u64>,
     puts: u64,
@@ -744,7 +747,8 @@ impl<S: Store> Db<S> {
                 }
                 let mut refs = Vec::with_capacity(units.len());
                 for (unit, range) in units.iter().zip(chunk::split(value.len(), block_size)) {
-                    let (object_id, reused) = ops::store_unit(w, unit, &value[range.clone()], dedupe, &self.params)?;
+                    let (object_id, reused) =
+                        ops::store_unit_with(w, unit, &value[range.clone()], dedupe, &self.params, &mut ctx.object_ids)?;
                     if reused {
                         ctx.dedupe_hits += 1;
                     } else {
@@ -815,6 +819,7 @@ impl<S: Store> Db<S> {
         if let Some(next) = ctx.next_revision {
             ops::put_meta_u64(&mut w, meta_key::NEXT_REVISION, next)?;
         }
+        ctx.object_ids.finish(&mut w)?;
         w.commit(durability)?;
         for &id in &ctx.removed {
             self.cache.remove(id);

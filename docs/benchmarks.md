@@ -73,8 +73,8 @@ Consequências que o leitor precisa ter em mente:
   com `--value-size` menor que isso os valores ficam maiores que o pedido (o manifest
   registra `min/max_value_len`). A partir daí o valor tem exatamente `value_size` bytes.
 - **S4 e dedupe**: valores com `len <= inline_max` ficam inline no manifesto e **não**
-  participam de dedupe (spec §6.2). Com os padrões (`inline_max` = 1024) o efeito do dedupe
-  só aparece com `--value-size` > 1024.
+  participam de dedupe (spec §6.2). Com os padrões (`inline_max` = 16 KiB, um bloco) o
+  efeito do dedupe só aparece com `--value-size` > 16 KiB, ou com um `--inline-max` menor.
 - **S6**: tamanhos variam alguns por cento em torno de `value_size` (1 KiB: 971–1062 B;
   64 KiB: 64 298–66 811 B no manifest).
 - **S2** com `value_size` não múltiplo de 8 deixa um termo parcial no fim, que
@@ -237,7 +237,7 @@ cargo bench --bench engine -- --scenario s3 --records 200k --value-size 512 --di
 cargo bench --bench engine -- --value-size 4k --records 20k
 
 # dedupe visível (S4 acima de inline_max)
-cargo bench --bench engine -- --scenario s4 --value-size 4k --variant adaptive-nodedupe,adaptive
+cargo bench --bench engine -- --scenario s4 --value-size 4k --inline-max 1k --variant adaptive-nodedupe,adaptive
 
 # orçamento de RAM 128 MiB (caches 32 + 32 MiB) com dados 0,25x (32 MiB) e 4x (512 MiB), valores de 1 KiB
 cargo bench --bench engine -- --mem-limit 128m --cache-bytes 32m --backend-cache-bytes 32m --records 32k  --tag ram-0.25x

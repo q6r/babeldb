@@ -92,8 +92,13 @@ Exemplo: `[1, 0x0102030405060708]` →
 `01 00 00 00 00 00 00 00  08 07 06 05 04 03 02 01`.
 
 - Em `hash_candidates`: não vazia (a chave é removida quando esvazia), sem
-  repetição, e cada id existe em `objects` com o mesmo `digest` e `raw_len` da
-  chave.
+  repetição, com ids menores que `next_object_id`. Um id presente em
+  `objects` tem o mesmo `digest` e `raw_len` da chave. Um id ausente de
+  `objects` é **resíduo** de um objeto já liberado (§14): como ids nunca são
+  reaproveitados, ele nunca nomeia outro objeto; a deduplicação o ignora e o
+  descarta quando regrava a lista, e o `gc` o remove. O `verify` de versões
+  anteriores a esta regra acusa resíduos como candidatos pendentes; o `gc`
+  de qualquer versão os remove.
 - Em `pending_imports`: ids na ordem em que os blocos foram gravados; um id
   pode repetir (bloco repetido e deduplicado) e **cada ocorrência vale uma
   referência** (§14).
@@ -463,9 +468,14 @@ refcounts[o] = ocorrências de o nas listas de chunks dos manifestos de records
 ```
 
 - A linha de `refcounts` existe se e só se o objeto existe, com valor ≥ 1.
-- Ao chegar a zero, na mesma transação, são removidos o objeto, o seu id na
-  lista de `hash_candidates` (a chave inteira, se a lista esvaziar) e a linha
-  de `refcounts`.
+- Ao chegar a zero, na mesma transação, são removidos o objeto e a linha de
+  `refcounts`, sem ler o objeto. O id pode ficar na lista de
+  `hash_candidates` como resíduo (§3.1), porque a chave da lista é o
+  `digest` do objeto, que só o envelope guarda. Escritores anteriores
+  removiam o id (e a chave, se a lista esvaziasse) nessa mesma transação; os
+  dois estados são v1 válidos.
+- Um objeto novo gravado com deduplicação regrava a lista da sua chave: os
+  ids existentes comparados, mais o novo (os resíduos saem).
 - Envelopes inline nunca entram em `objects` nem em `hash_candidates`.
 - Deduplicação (só no modo Adaptive): um candidato de `hash_candidates` só é
   reutilizado depois que os seus bytes decodificados são comparados byte a
@@ -473,8 +483,10 @@ refcounts[o] = ocorrências de o nas listas de chunks dos manifestos de records
 - No modo BabelPure a deduplicação está desligada: `hash_candidates` fica
   vazia e toda unidade armazenada é `BabelAffineV1` sem `aux_id`.
 
-`verify` recalcula essas contagens; `gc` corrige desvios e recolhe
-importações abandonadas, objetos órfãos, candidatos pendentes e params sem uso.
+`verify` recalcula essas contagens e conta à parte os resíduos de
+`hash_candidates` (recuperáveis, não são erro); `gc` corrige desvios e
+recolhe importações abandonadas, objetos órfãos, candidatos pendentes ou
+residuais e params sem uso.
 
 ## 15. Caminho de leitura
 

@@ -183,6 +183,9 @@ pub struct Config {
     /// Fixed block size used to split values larger than `inline_max`.
     pub block_size: u32,
     /// Values with `len <= inline_max` are stored inside the manifest.
+    /// Default: 16 KiB, the default block size, so a value that fits in one
+    /// block is one row (no object, refcount, candidate or id counter write)
+    /// and only multi-block values are deduplicated.
     pub inline_max: u32,
 
     // --- runtime parameters ---
@@ -221,7 +224,7 @@ impl Default for Config {
         Config {
             mode: Mode::Adaptive,
             block_size: 16 * 1024,
-            inline_max: 1024,
+            inline_max: 16 * 1024,
             max_key_len: 4096,
             max_value_len: 4 << 30,
             dedupe: true,

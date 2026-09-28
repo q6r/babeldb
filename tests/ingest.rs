@@ -32,8 +32,8 @@ use babeldb::source::LOCAL_FILE_ADAPTER_VERSION;
 use babeldb::store::Store;
 use babeldb::{Config, Db, Error, Expect, Mode, Revision};
 use common::{
-    BLOCK, INLINE, Pattern, Rng, assert_bytes_eq, is_conflict, key_str, mem_db, open_redb,
-    pattern_bytes, small_config, temp_dir, unix_ms, verify_ok,
+    BLOCK, INLINE, Pattern, Rng, assert_bytes_eq, candidate_ids, is_conflict, key_str, mem_db,
+    open_redb, pattern_bytes, small_config, temp_dir, unix_ms, verify_ok,
 };
 
 const BS: usize = BLOCK as usize;
@@ -812,8 +812,16 @@ fn importing_the_same_file_twice_shares_objects() {
             0,
             "{ctx}: all objects released"
         );
+        let stale = verify_ok(&db, true, &ctx).stale_candidates;
         let gc = gc_and_check_clean(&mut db, &ctx);
-        assert_eq!(gc, GcReport::default(), "{ctx}: nothing left for gc");
+        assert_eq!(
+            gc,
+            GcReport {
+                stale_candidates_removed: stale,
+                ..GcReport::default()
+            },
+            "{ctx}: nothing left for gc but stale candidate ids"
+        );
     }
 }
 
@@ -885,12 +893,28 @@ fn import_then_release<S: Store>(db: &mut Db<S>, ctx: &str) {
     );
     assert!(db.delete(b"rel", Expect::Any).unwrap());
     let st = db.stats().unwrap();
+    assert_eq!(st.objects, 0, "{ctx}: delete releases everything");
+    // The released objects leave only stale candidate ids, which gc drops.
+    let rep = verify_ok(db, true, ctx);
     assert_eq!(
-        (st.objects, st.hash_candidates),
-        (0, 0),
-        "{ctx}: delete releases everything"
+        rep.stale_candidates,
+        candidate_ids(&st),
+        "{ctx}: only stale candidate ids are left"
     );
-    gc_and_check_clean(db, ctx);
+    let gc = gc_and_check_clean(db, ctx);
+    assert_eq!(
+        gc,
+        GcReport {
+            stale_candidates_removed: rep.stale_candidates,
+            ..GcReport::default()
+        },
+        "{ctx}: gc drops the stale candidate ids, and nothing else"
+    );
+    assert_eq!(
+        db.stats().unwrap().hash_candidates,
+        0,
+        "{ctx}: no candidates after gc"
+    );
 }
 
 #[test]

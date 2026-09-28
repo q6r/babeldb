@@ -469,9 +469,11 @@ pub fn verify_ok<S: Store>(db: &Db<S>, deep: bool, ctx: &str) -> VerifyReport {
     report
 }
 
-/// Delete every record and check that no object, hash candidate or pending
-/// import survives (i.e. no reference was leaked). Only for databases without
-/// `keep_history` (retained history legitimately keeps objects alive).
+/// Delete every record and check that no object or pending import survives
+/// (i.e. no reference was leaked), that the hash candidates left are only
+/// ids of released objects, and that gc drops exactly those. Only for
+/// databases without `keep_history` (retained history legitimately keeps
+/// objects alive).
 #[track_caller]
 pub fn delete_everything_and_check_no_leaks<S: Store>(db: &mut Db<S>, ctx: &str) {
     let items = db
@@ -499,18 +501,32 @@ pub fn delete_everything_and_check_no_leaks<S: Store>(db: &mut Db<S>, ctx: &str)
         "{ctx}: {} objects still stored after deleting every record (leaked references)",
         st.objects
     );
-    assert_eq!(
-        st.hash_candidates, 0,
-        "{ctx}: hash candidates left after deleting everything"
-    );
     assert_eq!(st.pending_imports, 0, "{ctx}: pending imports left");
-    verify_ok(db, true, ctx);
-    db.gc().unwrap_or_else(|e| panic!("{ctx}: gc failed: {e}"));
+    let rep = verify_ok(db, true, ctx);
+    // With every object gone, each candidate id left is a stale id.
+    assert_eq!(
+        rep.stale_candidates,
+        candidate_ids(&st),
+        "{ctx}: candidate ids left after deleting everything"
+    );
+    let gc = db.gc().unwrap_or_else(|e| panic!("{ctx}: gc failed: {e}"));
+    assert_eq!(
+        (gc.stale_candidates_removed, gc.candidates_removed),
+        (rep.stale_candidates, 0),
+        "{ctx}: gc drops the stale candidate ids, and nothing else"
+    );
     let st = db
         .stats()
         .unwrap_or_else(|e| panic!("{ctx}: stats failed: {e}"));
     assert_eq!(st.objects, 0, "{ctx}: objects appeared after gc");
-    verify_ok(db, true, ctx);
+    assert_eq!(st.hash_candidates, 0, "{ctx}: hash candidates left after gc");
+    let rep = verify_ok(db, true, ctx);
+    assert_eq!(rep.stale_candidates, 0, "{ctx}: stale candidates after gc");
+}
+
+/// Ids in the `hash_candidates` lists: 36-byte keys, 8 bytes per id.
+pub fn candidate_ids(st: &babeldb::stats::Stats) -> u64 {
+    (st.candidate_bytes - 36 * st.hash_candidates) / 8
 }
 
 // ---------------------------------------------------------------------------

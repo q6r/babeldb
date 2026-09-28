@@ -98,7 +98,7 @@ FLAGS:
     --records N                   records loaded [20k]
     --value-size B                target value size [1024]
     --block-size B                engine block size [16k]
-    --inline-max B                engine inline threshold [1024]
+    --inline-max B                engine inline threshold [16k, at most --block-size]
     --cache-bytes B               engine block cache [64m]
     --backend-cache-bytes B       backend page cache (redb) [64m]
     --lmdb-map-size B             LMDB map size [4 x estimated data + 64m]
@@ -526,6 +526,7 @@ fn parse_command(args: &[String]) -> Res<Command> {
     let mut o = Opts::default();
     let mut m = ManifestOpts::default();
     let mut warmup: Option<u64> = None;
+    let mut inline_max_set = false;
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
         let (flag, inline) = match arg.split_once('=') {
@@ -572,7 +573,10 @@ fn parse_command(args: &[String]) -> Res<Command> {
             "--records" => o.records = parse_count(&value()?)?,
             "--value-size" => o.value_size = usize_of(parse_bytes(&value()?)?, "--value-size")?,
             "--block-size" => o.block_size = u32::try_from(parse_bytes(&value()?)?)?,
-            "--inline-max" => o.inline_max = u32::try_from(parse_bytes(&value()?)?)?,
+            "--inline-max" => {
+                o.inline_max = u32::try_from(parse_bytes(&value()?)?)?;
+                inline_max_set = true;
+            }
             "--cache-bytes" => o.cache_bytes = usize_of(parse_bytes(&value()?)?, "--cache-bytes")?,
             "--backend-cache-bytes" => {
                 o.backend_cache_bytes = usize_of(parse_bytes(&value()?)?, "--backend-cache-bytes")?
@@ -639,6 +643,10 @@ fn parse_command(args: &[String]) -> Res<Command> {
     }
     if !(o.zipf_theta > 0.0 && o.zipf_theta < 1.0) {
         return Err("--zipf-theta must be in (0, 1)".into());
+    }
+    if !inline_max_set {
+        // The default follows a smaller --block-size.
+        o.inline_max = o.inline_max.min(o.block_size);
     }
     if o.inline_max > o.block_size {
         return Err("--inline-max must be <= --block-size".into());

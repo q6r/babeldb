@@ -475,16 +475,20 @@ fn readers_and_writer<S: Store>(db: Db<S>, label: &str) {
         report.churn.map(|v| make_value(CHURN_ID, v)),
         "{label}: final churn key"
     );
-    verify_ok(&*db, true, label);
+    let rep = verify_ok(&*db, true, label);
     let Ok(mut db) = Arc::try_unwrap(db) else {
         panic!("{label}: a thread still holds the database");
     };
     let gc = db
         .gc()
         .unwrap_or_else(|e| panic!("{label}: gc failed: {e}"));
+    // Only the stale candidate ids of released objects are collectable.
     assert_eq!(
         gc,
-        GcReport::default(),
+        GcReport {
+            stale_candidates_removed: rep.stale_candidates,
+            ..GcReport::default()
+        },
         "{label}: gc found work after concurrent writes"
     );
     verify_ok(&db, true, label);

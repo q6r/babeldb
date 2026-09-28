@@ -52,9 +52,9 @@ use babeldb::{
     BatchOp, Config, Db, Error, Expect, MemStore, Mode, RedbStore, Revision, ScanOptions,
 };
 use common::{
-    BLOCK, INLINE, Pattern, Snapshot, assert_bytes_eq, assert_snapshot_eq, is_conflict,
-    is_invalid_argument, is_rejected_input, key_str, mem_db, open_redb, pattern_bytes,
-    small_config, snapshot, temp_dir, verify_ok,
+    BLOCK, INLINE, Pattern, Snapshot, assert_bytes_eq, assert_snapshot_eq, candidate_ids,
+    is_conflict, is_invalid_argument, is_rejected_input, key_str, mem_db, open_redb,
+    pattern_bytes, small_config, snapshot, temp_dir, verify_ok,
 };
 use proptest::prelude::*;
 use proptest::test_runner::FileFailurePersistence;
@@ -1725,11 +1725,33 @@ impl<H: Harness> Runner<H> {
              {distinct} distinct contents, dedupe {})",
             self.dedupe
         );
-        let candidates = if self.dedupe { st.objects } else { 0 };
-        assert_eq!(
-            st.hash_candidates, candidates,
-            "{ctx}: stats.hash_candidates"
-        );
+        // With dedupe every stored object is listed once as a candidate; any
+        // other listed id is a stale id of a released object.
+        let rep = db
+            .verify(false)
+            .unwrap_or_else(|e| panic!("{ctx}: verify failed: {e}"));
+        assert_eq!(rep.dangling_candidates, 0, "{ctx}: verify.dangling_candidates");
+        let listed = candidate_ids(&st);
+        if self.dedupe {
+            assert_eq!(
+                listed - rep.stale_candidates,
+                st.objects,
+                "{ctx}: candidate ids of stored objects ({listed} listed, {} stale)",
+                rep.stale_candidates
+            );
+            assert!(
+                st.hash_candidates >= st.objects,
+                "{ctx}: stats.hash_candidates {} < objects {}",
+                st.hash_candidates,
+                st.objects
+            );
+        } else {
+            assert_eq!(
+                (st.hash_candidates, listed),
+                (0, 0),
+                "{ctx}: no candidates without dedupe"
+            );
+        }
         assert_eq!(st.pending_imports, 0, "{ctx}: stats.pending_imports");
         assert_eq!(st.sources, 0, "{ctx}: stats.sources");
         assert_eq!(st.params, 0, "{ctx}: stats.params (nothing was trained)");
@@ -1757,6 +1779,7 @@ impl<H: Harness> Runner<H> {
         self.check_history("final");
         self.check_structure("final");
         let rep = verify_ok(self.db(), true, &self.ctx);
+        let stale = rep.stale_candidates;
         assert_eq!(
             rep.pending_imports, 0,
             "{}: verify.pending_imports",
@@ -1803,9 +1826,13 @@ impl<H: Harness> Runner<H> {
             .db_mut()
             .gc()
             .unwrap_or_else(|e| panic!("{}: gc failed: {e}", self.ctx));
+        // Only the stale candidate ids of released objects are collectable.
         assert_eq!(
             gc,
-            GcReport::default(),
+            GcReport {
+                stale_candidates_removed: stale,
+                ..GcReport::default()
+            },
             "{}: gc found work on a database that never crashed or imported \
              (leaked objects/candidates or refcount drift)",
             self.ctx
@@ -1856,7 +1883,6 @@ impl<H: Harness> Runner<H> {
             "{}: objects left after deleting every record and pruning history (leak)",
             self.ctx
         );
-        assert_eq!(st.hash_candidates, 0, "{}: hash candidates left", self.ctx);
         assert_eq!(st.logical_bytes, 0, "{}: logical bytes left", self.ctx);
         let rest = self
             .db()
@@ -1868,13 +1894,32 @@ impl<H: Harness> Runner<H> {
             self.ctx,
             rest.len()
         );
-        verify_ok(self.db(), true, &self.ctx);
+        let rep = verify_ok(self.db(), true, &self.ctx);
+        assert_eq!(
+            rep.stale_candidates,
+            candidate_ids(&st),
+            "{}: only stale candidate ids are left",
+            self.ctx
+        );
         let gc = self
             .h
             .db_mut()
             .gc()
             .unwrap_or_else(|e| panic!("{}: gc failed: {e}", self.ctx));
-        assert_eq!(gc, GcReport::default(), "{}: gc after drain", self.ctx);
+        assert_eq!(
+            gc,
+            GcReport {
+                stale_candidates_removed: rep.stale_candidates,
+                ..GcReport::default()
+            },
+            "{}: gc after drain",
+            self.ctx
+        );
+        let st = self
+            .db()
+            .stats()
+            .unwrap_or_else(|e| panic!("{}: stats failed: {e}", self.ctx));
+        assert_eq!(st.hash_candidates, 0, "{}: hash candidates left after gc", self.ctx);
     }
 }
 
@@ -2237,10 +2282,13 @@ fn write_batch_applies_ops_in_order() {
             .is_empty(),
         "empty group"
     );
-    verify_ok(&db, true, "in-order batches");
+    let stale = verify_ok(&db, true, "in-order batches").stale_candidates;
     assert_eq!(
         db.gc().unwrap(),
-        GcReport::default(),
+        GcReport {
+            stale_candidates_removed: stale,
+            ..GcReport::default()
+        },
         "gc after in-order batches"
     );
 }
@@ -2366,11 +2414,34 @@ fn adaptive_dedupes_identical_blocks_byte_for_byte() {
     );
     assert!(db.delete(b"y", Expect::Any).unwrap());
     let st = db.stats().unwrap();
+    assert_eq!(st.objects, 0, "every object released");
+    // Releasing leaves the two ids in their candidate lists, as stale ids.
+    let rep = verify_ok(&db, true, "dedupe");
     assert_eq!(
-        (st.objects, st.hash_candidates),
-        (0, 0),
-        "every object released"
+        (st.hash_candidates, candidate_ids(&st), rep.stale_candidates),
+        (2, 2, 2),
+        "stale candidates"
     );
+    // A new object with the same content drops the stale id of its list.
+    db.put(b"z", &block.repeat(2), Expect::Any).unwrap();
+    let st = db.stats().unwrap();
+    let rep = verify_ok(&db, true, "dedupe");
+    assert_eq!(
+        (st.objects, st.hash_candidates, candidate_ids(&st), rep.stale_candidates),
+        (1, 2, 2, 1),
+        "the rewritten list holds only the new object"
+    );
+    let mut db = db;
+    let gc = db.gc().unwrap();
+    assert_eq!(
+        gc,
+        GcReport {
+            stale_candidates_removed: 1,
+            ..GcReport::default()
+        }
+    );
+    let st = db.stats().unwrap();
+    assert_eq!((st.objects, st.hash_candidates), (1, 1), "gc drops the stale row");
     verify_ok(&db, true, "dedupe");
 }
 

@@ -712,7 +712,8 @@ fn gc_repairs_refcount_drift_and_removes_garbage() {
             .unwrap();
         w.remove(Table::Refcounts, &id_key(ids[1])).unwrap();
         // Garbage: an orphan with row and candidate, an orphan without row,
-        // a row without object, a candidate pointing to a missing object.
+        // a row without object, a candidate pointing to a missing object
+        // (the stale id a released object leaves).
         let orphan = pattern(BLOCK, 9);
         ops::store_unit(
             &mut w,
@@ -734,6 +735,8 @@ fn gc_repairs_refcount_drift_and_removes_garbage() {
             .unwrap();
         let ghost = ops::alloc_id(&mut w, meta_key::NEXT_OBJECT_ID, "object id").unwrap();
         ops::add_candidate(&mut w, &hash::digest(b"ghost"), 5, ghost).unwrap();
+        // A live object also listed under another digest (corruption).
+        ops::add_candidate(&mut w, &hash::digest(b"other"), 5, ids[2]).unwrap();
         // Params: unused, active in meta, and needed by a referenced object.
         let mut add_param = |kind: u8| {
             let id = ops::alloc_id(&mut w, meta_key::NEXT_PARAM_ID, "param id").unwrap();
@@ -783,16 +786,18 @@ fn gc_repairs_refcount_drift_and_removes_garbage() {
         rep.refcount_mismatches,
         rep.orphan_objects,
         rep.dangling_candidates,
+        rep.stale_candidates,
         rep.missing_params,
         rep.format_errors,
     );
-    assert_eq!(counts, (2, 3, 1, 0, 0), "{rep:#?}");
+    assert_eq!(counts, (2, 3, 1, 1, 0, 0), "{rep:#?}");
     assert!(!rep.ok());
 
     let gc = db.gc().unwrap();
     let expected = GcReport {
         objects_removed: 2,
         candidates_removed: 1,
+        stale_candidates_removed: 1,
         params_removed: 1,
         refcounts_fixed: 3,
         ..GcReport::default()
