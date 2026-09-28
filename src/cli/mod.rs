@@ -286,8 +286,10 @@ pub fn config_for(globals: &GlobalOptions) -> Result<Config, UsageError> {
     if let Some(block_size) = globals.block_size {
         cfg.block_size = block_size;
     }
-    if let Some(inline_max) = globals.inline_max {
-        cfg.inline_max = inline_max;
+    match globals.inline_max {
+        Some(inline_max) => cfg.inline_max = inline_max,
+        // The default follows a smaller --block-size.
+        None => cfg.inline_max = cfg.inline_max.min(cfg.block_size),
     }
     cfg.keep_history = globals.history;
     cfg.validate().map_err(|e| {

@@ -106,7 +106,9 @@ pub struct Stats {
     /// Tombstone manifests in `records` (only written when history is kept).
     pub tombstones: u64,
     pub objects: u64,
-    /// Rows of `hash_candidates` (one per distinct (digest, raw_len)).
+    /// Rows of `hash_candidates`: one per distinct (digest, raw_len) of the
+    /// stored objects, plus rows left with only the ids of released objects
+    /// (stale ids, dropped by `gc`).
     pub hash_candidates: u64,
     pub params: u64,
     pub history_entries: u64,

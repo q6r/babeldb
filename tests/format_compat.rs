@@ -2384,6 +2384,9 @@ fn validate_tables<R: ReadTxn + ?Sized>(r: &R) -> Validation {
                 }
                 for oid in ids {
                     match c.objects.get(&oid).copied() {
+                        // Residue of a released object (§3.1): ids are never
+                        // reused, so it is below the counter and unreferenced.
+                        None if oid != 0 && oid < next_object_id && !c.refs.contains_key(&oid) => {}
                         None => c.problem(format!("{what}: dangling candidate {oid}")),
                         Some((l, d)) if l != raw_len || d != digest => c.problem(format!(
                             "{what}: candidate {oid} has a different digest/raw_len"

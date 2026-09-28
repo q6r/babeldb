@@ -388,12 +388,20 @@ impl<S: Store> Db<S> {
         };
         let mut ids = Vec::with_capacity(staged.len());
         let mut reused = 0u64;
+        let mut object_ids = ops::ObjectIds::default();
         for block in staged.iter() {
-            let (id, was_reused) =
-                ops::store_unit(&mut w, &block.unit, block.raw(), dedupe, &self.params)?;
+            let (id, was_reused) = ops::store_unit_with(
+                &mut w,
+                &block.unit,
+                block.raw(),
+                dedupe,
+                &self.params,
+                &mut object_ids,
+            )?;
             reused += u64::from(was_reused);
             ids.push(id);
         }
+        object_ids.finish(&mut w)?;
         let pending_key = id_key(import_id);
         let mut list = w
             .get(Table::PendingImports, &pending_key)?

@@ -572,7 +572,7 @@ pub fn write_help(out: &mut dyn Write, topic: Option<&str>, ctx: HelpContext) ->
                 "  --db <path>          database file (redb); put, import, gen, repl and serve create it",
                 "  --mode <mode>        adaptive (default) or babel-pure                          [creation]",
                 "  --block-size <N>     block size of values above --inline-max, 512..1MiB (16KiB) [creation]",
-                "  --inline-max <N>     values up to N bytes live inside the manifest (1KiB)      [creation]",
+                "  --inline-max <N>     values up to N bytes live inside the manifest (16KiB)     [creation]",
                 "  --history            retain previous revisions on overwrite and delete (this run)",
                 "  -h, --help           show this help",
                 "  -V, --version        show the version",
@@ -1888,6 +1888,14 @@ pub fn render_verify(out: &mut dyn Write, r: &VerifyReport) -> io::Result<()> {
     sub(out, "refcount mismatches", r.refcount_mismatches)?;
     sub(out, "digest failures", r.digest_failures)?;
     sub(out, "dangling candidates", r.dangling_candidates)?;
+    sub(
+        out,
+        "stale candidates",
+        format!(
+            "{} (ids of released objects; collectable by gc; not an error)",
+            r.stale_candidates
+        ),
+    )?;
     sub(out, "missing params", r.missing_params)?;
     sub(
         out,
@@ -1913,6 +1921,7 @@ pub fn render_gc(out: &mut dyn Write, r: &GcReport) -> io::Result<()> {
     sub(out, "abandoned imports", r.abandoned_imports)?;
     sub(out, "objects removed", r.objects_removed)?;
     sub(out, "candidates removed", r.candidates_removed)?;
+    sub(out, "stale candidates removed", r.stale_candidates_removed)?;
     sub(out, "params removed", r.params_removed)?;
     sub(out, "refcounts fixed", r.refcounts_fixed)
 }

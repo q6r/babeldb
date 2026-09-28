@@ -982,10 +982,12 @@ fn engine_on_wal_survives_crashes_with_a_mixed_workload() {
         if !matched {
             assert_state_eq(&got, &durable, &format!("{ctx}: not the durable state plus a prefix of the deferred puts"));
         }
-        verify_ok(&db, true, &format!("{ctx}: after the crash"));
+        let rep = verify_ok(&db, true, &format!("{ctx}: after the crash"));
         let mut db = db;
         let gc = db.gc().expect("gc");
-        assert_eq!(gc, babeldb::maintenance::GcReport::default(), "{ctx}: a crash must leave nothing to collect");
+        // Stale candidate ids of released objects are expected residue.
+        let expected = babeldb::maintenance::GcReport { stale_candidates_removed: rep.stale_candidates, ..Default::default() };
+        assert_eq!(gc, expected, "{ctx}: a crash must leave nothing to collect");
         durable = got;
         drop(db);
     }

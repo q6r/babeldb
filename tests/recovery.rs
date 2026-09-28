@@ -740,11 +740,15 @@ fn crash_writer(kind: Kind) {
                 );
             }
         }
-        verify_ok(&db, true, &format!("{ctx} after recovery"));
+        let rep = verify_ok(&db, true, &format!("{ctx} after recovery"));
         let gc = db.gc().unwrap_or_else(|e| panic!("{ctx}: gc failed: {e}"));
+        // Stale candidate ids of released objects are expected residue.
         assert_eq!(
             gc,
-            GcReport::default(),
+            GcReport {
+                stale_candidates_removed: rep.stale_candidates,
+                ..GcReport::default()
+            },
             "{ctx}: a killed writer must leave no orphan, dangling candidate or refcount \
              drift (every commit is atomic)"
         );

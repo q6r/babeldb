@@ -47,9 +47,15 @@ pub struct VerifyReport {
     /// Deep only: units that fail to decode or whose bytes do not match their
     /// digest (objects, inline envelopes, regenerated `Generated` records).
     pub digest_failures: u64,
-    /// Candidate ids pointing to a missing object or to an object with
-    /// another digest/length, plus malformed candidate entries.
+    /// Candidate ids pointing to an object with another digest/length, to a
+    /// missing object that is still referenced, or to the reserved id 0,
+    /// plus malformed candidate entries.
     pub dangling_candidates: u64,
+    /// Candidate ids of released objects (missing and referenced by
+    /// nothing). Releasing an object leaves its id in its candidate list;
+    /// ids are never reused and dedupe skips such ids, so they are harmless
+    /// and only take space until the list is rewritten or `gc` drops them.
+    pub stale_candidates: u64,
     /// Distinct param ids that an envelope needs (or that meta marks active)
     /// but that are missing, undecodable, of the wrong kind or unpreparable.
     pub missing_params: u64,
@@ -90,9 +96,13 @@ pub struct GcReport {
     /// import can be running); their references are released.
     pub abandoned_imports: u64,
     pub objects_removed: u64,
-    /// Candidate ids dropped from candidate lists (missing or mismatching
-    /// object, duplicate) plus malformed candidate entries removed.
+    /// Candidate ids dropped from candidate lists (mismatching object,
+    /// missing object that is still referenced, duplicate) plus malformed
+    /// candidate entries removed.
     pub candidates_removed: u64,
+    /// Stale candidate ids dropped: ids of released objects
+    /// (`VerifyReport::stale_candidates`), expected residue rather than drift.
+    pub stale_candidates_removed: u64,
     pub params_removed: u64,
     /// Refcount rows rewritten, created or removed because they disagreed
     /// with the references (releases of abandoned imports are not drift).
@@ -202,20 +212,30 @@ fn regenerate_digest(g: &dyn Generator, params: &[u8], len: u64) -> Result<Diges
     Ok(hasher.finalize())
 }
 
-/// Whether candidate `id` of candidate key `key` is an existing object with
-/// that digest and length.
-fn candidate_matches<T: ReadTxn + ?Sized>(t: &T, key: &[u8], id: u64) -> Result<bool> {
+/// What candidate id `id` of candidate key `key` names.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CandidateStatus {
+    /// An existing object with that digest and length.
+    Live,
+    /// No object (released, unless something still references it).
+    Missing,
+    /// An object with another digest or length, or an undecodable one.
+    Mismatch,
+}
+
+fn candidate_status<T: ReadTxn + ?Sized>(t: &T, key: &[u8], id: u64) -> Result<CandidateStatus> {
     Ok(match t.get(Table::Objects, &id_key(id))? {
         Some(env) => match format::read_envelope(&env) {
-            Ok((h, _)) => format::candidate_key(&h.digest, h.raw_len).as_slice() == key,
-            Err(_) => false,
+            Ok((h, _)) if format::candidate_key(&h.digest, h.raw_len).as_slice() == key => CandidateStatus::Live,
+            _ => CandidateStatus::Mismatch,
         },
-        None => false,
+        None => CandidateStatus::Missing,
     })
 }
 
-/// `ops::remove_object`, tolerating an undecodable envelope (its candidate
-/// entry cannot be located; the candidate pass drops dangling ids). The
+/// Remove an object, its refcount row and (unlike `ops::remove_object`,
+/// which leaves a stale id) its candidate entry, tolerating an undecodable
+/// envelope (its entry cannot be located; the candidate pass drops it). The
 /// refcount row is removed either way. Returns whether an object was removed.
 fn remove_object_lenient<W: WriteTxn + ?Sized>(w: &mut W, id: u64) -> Result<bool> {
     let key = id_key(id);
@@ -816,15 +836,21 @@ impl<'d, S: Store> Verifier<'d, S> {
                 }
             };
             for id in ids {
-                if !candidate_matches(r, k, id)? {
-                    self.rep.dangling_candidates += 1;
-                    self.issue(|| {
-                        format!(
-                            "{}: object {id} is missing or has another digest/length",
-                            name()
-                        )
-                    });
-                }
+                // A stale id must still be below the counter (checked by
+                // `check_counters`): otherwise a new object could get it.
+                self.max_object_id = self.max_object_id.max(id);
+                let problem = match candidate_status(r, k, id)? {
+                    _ if id == 0 => "is the reserved id 0",
+                    CandidateStatus::Live => continue,
+                    CandidateStatus::Missing if !self.expected.contains_key(&id) => {
+                        self.rep.stale_candidates += 1;
+                        continue;
+                    }
+                    CandidateStatus::Missing => "is missing but still referenced",
+                    CandidateStatus::Mismatch => "has another digest/length",
+                };
+                self.rep.dangling_candidates += 1;
+                self.issue(|| format!("{}: object {id} {problem}", name()));
             }
             Ok(true)
         })
@@ -1075,13 +1101,20 @@ impl<S: Store> Db<S> {
                     continue;
                 };
                 let mut keep: Vec<u64> = Vec::with_capacity(ids.len());
-                for &id in &ids {
-                    if !keep.contains(&id) && candidate_matches(&w, &k, id)? {
-                        keep.push(id);
+                let mut stale = 0u64;
+                for (i, &id) in ids.iter().enumerate() {
+                    if ids[..i].contains(&id) {
+                        continue; // duplicate
+                    }
+                    match candidate_status(&w, &k, id)? {
+                        CandidateStatus::Live => keep.push(id),
+                        CandidateStatus::Missing if id != 0 && !live.contains_key(&id) => stale += 1,
+                        _ => {}
                     }
                 }
                 if keep.len() != ids.len() {
-                    rep.candidates_removed += (ids.len() - keep.len()) as u64;
+                    rep.stale_candidates_removed += stale;
+                    rep.candidates_removed += (ids.len() - keep.len()) as u64 - stale;
                     if keep.is_empty() {
                         w.remove(Table::HashCandidates, &k)?;
                     } else {

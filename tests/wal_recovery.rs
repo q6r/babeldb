@@ -669,9 +669,11 @@ fn crash_writer(kind: Kind) {
                 assert_eq!(got, Some(rev), "{ctx}: {} was last written by acknowledged step {s} (revision {rev})", key_str(key));
             }
         }
-        verify_ok(&db, true, &format!("{ctx} after recovery"));
+        let rep = verify_ok(&db, true, &format!("{ctx} after recovery"));
         let gc = db.gc().unwrap_or_else(|e| panic!("{ctx}: gc failed: {e}"));
-        assert_eq!(gc, GcReport::default(), "{ctx}: a killed writer must leave nothing to collect");
+        // Stale candidate ids of released objects are expected residue.
+        let expected = GcReport { stale_candidates_removed: rep.stale_candidates, ..GcReport::default() };
+        assert_eq!(gc, expected, "{ctx}: a killed writer must leave nothing to collect");
         max_rev = max_rev.max(committed.iter().map(|&(_, r)| r).chain(snap.values().map(|(r, _)| *r)).max().unwrap_or(0));
         base = actual;
         drop(db);
@@ -770,9 +772,10 @@ fn wal_crash_during_group_commit() {
                 }
             }
         }
-        verify_ok(&db, true, &format!("{ctx} after recovery"));
+        let rep = verify_ok(&db, true, &format!("{ctx} after recovery"));
         let gc = db.gc().unwrap_or_else(|e| panic!("{ctx}: gc failed: {e}"));
-        assert_eq!(gc, GcReport::default(), "{ctx}: a killed writer must leave nothing to collect");
+        let expected = GcReport { stale_candidates_removed: rep.stale_candidates, ..GcReport::default() };
+        assert_eq!(gc, expected, "{ctx}: a killed writer must leave nothing to collect");
         max_rev = max_rev.max(snap.values().map(|(r, _)| *r).max().unwrap_or(0));
         max_rev = max_rev.max(per_thread.iter().flatten().map(|&(_, r)| r).max().unwrap_or(0));
         base = actual;
