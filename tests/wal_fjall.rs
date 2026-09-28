@@ -236,6 +236,65 @@ fn flush_memtables_moves_the_commits_into_tables() -> Result<()> {
     Ok(())
 }
 
+/// `FjallOptions::for_wal` separates values of 1 KiB and more: behind a small WAL (frequent
+/// checkpoints) with 1 MiB memtables (frequent flushes), large values end up in blob files, in
+/// tables' pointers and in fjall's journal buffer. A crash (no closing checkpoint) loses no
+/// acknowledged commit, and `compact` leaves no blob garbage.
+#[test]
+fn kv_separated_values_survive_a_crash_behind_the_wal() -> Result<()> {
+    const LEN: usize = 16 << 10;
+    let dir = tempfile::tempdir()?;
+    let opts = FjallOptions { memtable_bytes: 1 << 20, ..FjallOptions::for_wal() };
+    let value = |i: u64, round: u64| Rng::new(i * 4 + round + 1).bytes(LEN);
+    let mut expected: Vec<Option<Vec<u8>>> = Vec::new();
+    let check = |s: &WalStore<FjallStore>, expected: &[Option<Vec<u8>>], what: &str| {
+        let r = s.begin_read().expect("begin_read");
+        for (i, v) in expected.iter().enumerate() {
+            let got = r.get(Table::Objects, &(i as u64).to_be_bytes()).expect("get");
+            assert!(got == *v, "{what}: key {i}: {:?} bytes, expected {:?}", got.map(|g| g.len()), v.as_ref().map(Vec::len));
+        }
+    };
+    {
+        let store = open_store(dir.path(), &small_wal(), &opts);
+        assert!(store.inner().kv_separated());
+        for i in 0..240u64 {
+            let v = value(i, 0);
+            let mut w = store.begin_write()?;
+            w.put(Table::Objects, &i.to_be_bytes(), &v)?;
+            w.commit(Durability::Immediate)?;
+            expected.push(Some(v));
+        }
+        store.inner().flush_memtables()?;
+        assert!(store.inner().blob_file_count() > 0, "no blob file after a flush");
+        for i in 0..240u64 {
+            let mut w = store.begin_write()?;
+            match i % 3 {
+                0 => {
+                    let v = value(i, 1);
+                    w.put(Table::Objects, &i.to_be_bytes(), &v)?;
+                    expected[i as usize] = Some(v);
+                }
+                1 => {
+                    assert!(w.remove(Table::Objects, &i.to_be_bytes())?);
+                    expected[i as usize] = None;
+                }
+                _ => continue,
+            }
+            w.commit(Durability::Immediate)?;
+        }
+        assert!(store.stats().checkpoints > 0, "no checkpoint");
+        crash(store);
+    }
+    let mut store = open_store(dir.path(), &small_wal(), &opts);
+    check(&store, &expected, "after the crash");
+    assert!(store.compact()?);
+    assert_eq!(store.inner().stale_blob_bytes(), 0, "blob garbage left by compact");
+    check(&store, &expected, "after compact");
+    drop(store);
+    check(&open_store(dir.path(), &small_wal(), &opts), &expected, "after compact and reopen");
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Read snapshot reuse (see `store::fjall`)
 // ---------------------------------------------------------------------------
@@ -742,6 +801,62 @@ fn measure_space_settling() {
         }
         println!("  +{wait:>2}s: keyspaces/ {:.2} MB, {} files", keyspaces_bytes(inner) as f64 / 1e6, inner.files().len());
     }
+}
+
+/// fjall's write backpressure while large values go through the engine: `BABEL_MEASURE_RECORDS`
+/// (default 2000) incompressible values of `BABEL_MEASURE_VALUE_KIB` KiB (default 1024) loaded,
+/// then overwritten twice, in batches of 16 values; a thread samples
+/// `FjallStore::write_pressure` every millisecond. `BABEL_FJALL_KV=off` turns key-value
+/// separation off, `BABEL_FJALL_MEMTABLE_MB` sets the memtable size, `BABEL_FJALL_JOURNAL_LZ4`
+/// (`1` | `0`) the journal compression.
+#[test]
+#[ignore = "measurement: cargo test --release --features fjall --test wal_fjall -- --ignored --nocapture measure_write_pressure"]
+fn measure_write_pressure() {
+    use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+    let n = env_u64("BABEL_MEASURE_RECORDS", 2000);
+    let len = env_u64("BABEL_MEASURE_VALUE_KIB", 1024) as usize * 1024;
+    let mut opts = FjallOptions::for_wal();
+    if std::env::var("BABEL_FJALL_KV").as_deref() == Ok("off") {
+        opts.kv_separation = None;
+    }
+    opts.memtable_bytes = env_u64("BABEL_FJALL_MEMTABLE_MB", 64) << 20;
+    if let Ok(v) = std::env::var("BABEL_FJALL_JOURNAL_LZ4") {
+        opts.journal_lz4 = v == "1";
+    }
+    println!("{n} values of {len} B, {opts:?}");
+    let dir = common::temp_dir("babeldb-fjall-pressure-");
+    let db = Db::open_fjall_wal_with(dir.path().join("p.fjall"), Config::adaptive(), WalConfig::default(), &opts).expect("open");
+    let done = AtomicBool::new(false);
+    std::thread::scope(|s| {
+        let sampler = s.spawn(|| {
+            let (mut samples, mut max_sealed, mut max_l0, mut sealed4, mut l0_20) = (0u64, 0, 0, 0u64, 0u64);
+            while !done.load(SeqCst) {
+                let (sealed, l0) = db.store().inner().write_pressure();
+                samples += 1;
+                max_sealed = max_sealed.max(sealed);
+                max_l0 = max_l0.max(l0);
+                sealed4 += u64::from(sealed >= 4);
+                l0_20 += u64::from(l0 >= 20);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            println!(
+                "  {samples} samples: max {max_sealed} sealed memtables ({sealed4} samples with 4+), max {max_l0} level-0 runs ({l0_20} samples with 20+)"
+            );
+        });
+        for round in 0..3u64 {
+            let t0 = Instant::now();
+            for start in (0..n).step_by(16) {
+                let values: Vec<([u8; 8], Vec<u8>)> =
+                    (start..(start + 16).min(n)).map(|i| (i.to_be_bytes(), Rng::new(i * 3 + round + 1).bytes(len))).collect();
+                let ops: Vec<BatchOp<'_>> = values.iter().map(|(k, v)| BatchOp::Put { key: k, value: v, expect: Expect::Any }).collect();
+                db.write_batch(&ops).expect("write_batch");
+            }
+            let secs = t0.elapsed().as_secs_f64();
+            println!("  round {round}: {:.0} values/s, {:.0} MB/s", n as f64 / secs, (n as usize * len) as f64 / secs / 1e6);
+        }
+        done.store(true, SeqCst);
+        sampler.join().expect("sampler");
+    });
 }
 
 #[test]

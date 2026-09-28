@@ -115,21 +115,75 @@
 //!   report "absent"; scan bounds of any length are clamped exactly.
 //! * Values: at most `u32::MAX` bytes (`LimitExceeded` above).
 //! * `compact` seals and flushes the memtables, runs fjall's major compaction
-//!   and then lsm-tree's version GC, so the replaced table files are deleted
+//!   (plus the blob garbage collection of *Key-value separation*) and then
+//!   lsm-tree's version GC, so the replaced table and blob files are deleted
 //!   before it returns (fjall alone keeps them until a later memtable
 //!   rotation). This goes through `#[doc(hidden)]` fjall APIs (`inner`,
 //!   `rotate_memtable`, `sealed_memtable_count`, `major_compact`, `tree`,
-//!   `AbstractTree::get_version_history_lock`, `visible_seqno`), which are
-//!   public but carry no semver promise; `Cargo.lock` pins fjall 3.1.10.
+//!   `AbstractTree::get_version_history_lock`, `visible_seqno`,
+//!   `ItemAccessor::is_indirection`), which are public but carry no semver
+//!   promise; `Cargo.lock` pins fjall 3.1.10.
 //! * `files` lists every regular file under the directory, which must be
 //!   dedicated to the store: journals (`<n>.jnl`, created preallocated to
 //!   64 MiB and rotated once a flush finds them past 64 MB), `version`, `lock`,
-//!   and `keyspaces/<id>/...` (tables, version files, fjall's internal metadata
-//!   keyspace). Background flushes and compactions (fjall runs min(cores, 4)
-//!   worker threads) may add or delete files at any time.
+//!   and `keyspaces/<id>/...` (tables, blob files in `blobs/`, version files,
+//!   fjall's internal metadata keyspace). Background flushes and compactions
+//!   (fjall runs min(cores, 4) worker threads) may add or delete files at any
+//!   time.
 //! * [`FjallStore::flush_memtables`] writes the memtables to tables (the data
 //!   files) without compacting; until then recent commits live in memory and
 //!   in the journal only.
+//!
+//! # Key-value separation ([`FjallKvSeparation`])
+//!
+//! A per-keyspace fjall setting, so in the single-keyspace layout one
+//! threshold covers every table: the 16 KiB value blocks of `Objects`, the
+//! inline values of `Records` past it, `History`. From fjall 3.1.10 /
+//! lsm-tree 3.1.10 (`blob_tree`, `vlog`, `compaction/worker.rs`, `flavour.rs`):
+//!
+//! * Separation happens when a memtable is flushed: each value of at least
+//!   `threshold_bytes` is appended to a blob file (`keyspaces/<id>/blobs/<n>`:
+//!   a 38-byte header with an xxh3-128 checksum, the key, the value, LZ4 per
+//!   blob if enabled, kept even when it does not shrink it) and the table keeps
+//!   a pointer (file, offset, sizes). Until then the journal (and the WAL in
+//!   front) holds the whole value, as without separation. A new blob file is
+//!   started once one reaches `blob_file_bytes`. Compactions merge the tables
+//!   only (pointers), so a large value is written once more after the journal,
+//!   instead of once per level. Reading a separated value costs one more read
+//!   (a `pread` of the blob), whose result the block cache keeps.
+//! * Durability: every blob file is `sync_all`ed when finished, before the
+//!   tables of the same flush are written and before the version file that
+//!   lists both is persisted (rewritten atomically, synced); blob files no
+//!   version lists (a crash in between) are deleted by recovery. So a flush
+//!   publishes its blob files and tables together, and the crash semantics of
+//!   *Durability* are unchanged: the journal, whose sync is what an Immediate
+//!   commit (a `WalStore` checkpoint) waits for, never depends on blob files.
+//! * Garbage: a compaction counts, per blob file, the pointers it drops
+//!   (overwritten or deleted values; the count is persisted with the version).
+//!   A merge then drops the blob files that are entirely garbage ("dead"), and
+//!   copies the live blobs of those at least `staleness_percent` garbage to a
+//!   new file, when no table outside its input points into them, at most the
+//!   oldest `age_cutoff_percent` of them. Both decisions use the counts from
+//!   before the merge. This runs in fjall's background compactions, but only
+//!   once a tombstone or a newer version is merged with the value it replaces
+//!   (for the leveled strategy, once they reach the same level).
+//! * `compact` therefore runs, after its major compaction, while blob garbage
+//!   remains: a second one (drops the dead blob files, copies the stale ones),
+//!   then a third one in which this store's compaction filter replaces every
+//!   separated value by itself (fjall writes it to a new blob file and counts
+//!   the old blob as garbage: every old blob file is dead afterwards), and a
+//!   fourth one that drops them. The third copies every live separated byte
+//!   once; it only runs when the second left garbage (files below the
+//!   staleness threshold or past the age cutoff). Afterwards no garbage is
+//!   left and the blob files hold the live values only. The major compactions
+//!   rewrite the tables, which hold keys and blob pointers only for separated
+//!   values, so the passes without the filter are cheap.
+//! * Write backpressure ([`FjallStore::write_pressure`]): overwriting 1000
+//!   incompressible 1 MiB values twice through the engine (`wal_fjall`
+//!   `measure_write_pressure`, one writer, 64 MiB memtables) peaked at 1
+//!   sealed memtable and 4 level-0 runs with separation, and at 15 level-0
+//!   runs without it, at half the overwrite throughput (~50 against ~105
+//!   MB/s); fjall starts delaying commits at 4 sealed memtables or 20 runs.
 //!
 //! # Tuning ([`FjallOptions`])
 //!
@@ -142,8 +196,12 @@
 //! `Db::open_fjall_wal`: LZ4 on every level, so freshly flushed tables are
 //! compressed too (~10% smaller tables on the chat workload of
 //! `benches/compare.rs`); index and filter blocks pinned (a point read took
-//! ~3.9 us without, ~3.0 us with, on 100k records); and
-//! [`DeferredPersist::JournalBuffer`]. fjall 3.1.10 has no other block
+//! ~3.9 us without, ~3.0 us with, on 100k records);
+//! [`DeferredPersist::JournalBuffer`]; and key-value separation from 1 KiB
+//! without LZ4 ([`FjallKvSeparation::for_wal`]). The journal keeps fjall's
+//! LZ4 on values of 4 KiB or more (applied while the commit holds the journal
+//! lock): turning it off (`journal_lz4`) made no measurable difference to
+//! overwrites of 1 MiB or 64 KiB incompressible values. fjall 3.1.10 has no other block
 //! compression than LZ4. Tables of that workload after a flush, by data block
 //! size: 2 KiB 30.5 MB, 4 KiB 29.8 MB, 8 KiB 29.5 MB, 16 KiB 29.0 MB (4 KiB
 //! uncompressed: 33.9 MB). Smaller restart intervals and the data block hash
@@ -154,14 +212,17 @@ use std::borrow::Cow;
 use std::fmt;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
+use ::fjall::compaction::filter::{
+    CompactionFilter, CompactionFilterResult, Context as FilterContext, Factory, ItemAccessor, Verdict,
+};
 use ::fjall::config::{BlockSizePolicy, CompressionPolicy, HashRatioPolicy, PinningPolicy, RestartIntervalPolicy};
 use ::fjall::{
-    AbstractTree, CompressionType, Guard, KeyspaceCreateOptions, PersistMode, Readable,
-    SingleWriterTxDatabase, SingleWriterTxKeyspace, SingleWriterWriteTx, Snapshot,
+    AbstractTree, CompressionType, Guard, Keyspace, KeyspaceCreateOptions, KvSeparationOptions, PersistMode,
+    Readable, SingleWriterTxDatabase, SingleWriterTxKeyspace, SingleWriterWriteTx, Snapshot,
 };
 
 use super::{Durability, ReadTxn, ScanFn, Store, Table, WriteTxn};
@@ -252,6 +313,72 @@ pub enum FjallCompression {
     Lz4,
 }
 
+/// Key-value separation of the keyspaces (fjall's blob files; module
+/// documentation, *Key-value separation*). The defaults are fjall's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FjallKvSeparation {
+    /// Values of at least this many bytes are written to blob files when their
+    /// memtable is flushed (fjall: 1 KiB); smaller ones stay in the tables.
+    pub threshold_bytes: u32,
+    /// Size at which a flush or a compaction starts a new blob file (fjall:
+    /// 64 MiB).
+    pub blob_file_bytes: u64,
+    /// LZ4 on each blob (fjall's default) instead of storing it as is.
+    pub lz4: bool,
+    /// Garbage share, in percent of a blob file's bytes, from which a
+    /// compaction whose input alone references the file copies its live blobs
+    /// to a new file (fjall: 25).
+    pub staleness_percent: u8,
+    /// Share, in percent, of those stale blob files, oldest first, that one
+    /// compaction copies (fjall: 25; rounded down, so 25 needs 4 of them).
+    pub age_cutoff_percent: u8,
+}
+
+impl Default for FjallKvSeparation {
+    fn default() -> Self {
+        FjallKvSeparation {
+            threshold_bytes: 1 << 10,
+            blob_file_bytes: 64 << 20,
+            lz4: true,
+            staleness_percent: 25,
+            age_cutoff_percent: 25,
+        }
+    }
+}
+
+impl FjallKvSeparation {
+    /// The separation of [`FjallOptions::for_wal`]: fjall's defaults without
+    /// LZ4, because the engine compresses what it can before a value reaches
+    /// the store (LZ4 adds ~64 bytes to an incompressible 16 KiB block).
+    pub fn for_wal() -> FjallKvSeparation {
+        FjallKvSeparation { lz4: false, ..FjallKvSeparation::default() }
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.threshold_bytes == 0 {
+            return Err(Error::InvalidArgument("fjall kv separation threshold_bytes must be at least 1".into()));
+        }
+        if self.blob_file_bytes < 64 << 10 {
+            return Err(Error::InvalidArgument(format!("fjall blob_file_bytes {} below 64 KiB", self.blob_file_bytes)));
+        }
+        for (name, p) in [("staleness_percent", self.staleness_percent), ("age_cutoff_percent", self.age_cutoff_percent)] {
+            if !(1..=100).contains(&p) {
+                return Err(Error::InvalidArgument(format!("fjall {name} {p} outside [1, 100]")));
+            }
+        }
+        Ok(())
+    }
+
+    fn fjall_options(&self) -> KvSeparationOptions {
+        KvSeparationOptions::default()
+            .separation_threshold(self.threshold_bytes)
+            .file_target_size(self.blob_file_bytes)
+            .compression(if self.lz4 { CompressionType::Lz4 } else { CompressionType::None })
+            .staleness_threshold(f32::from(self.staleness_percent) / 100.0)
+            .age_cutoff(f32::from(self.age_cutoff_percent) / 100.0)
+    }
+}
+
 /// Tuning of a [`FjallStore`] (module documentation, *Tuning*).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FjallOptions {
@@ -281,6 +408,11 @@ pub struct FjallOptions {
     /// key whole instead of prefix-compressed.
     pub data_block_restart_interval: u8,
     pub deferred: DeferredPersist,
+    /// Key-value separation (fjall: none).
+    pub kv_separation: Option<FjallKvSeparation>,
+    /// LZ4 on the values of 4 KiB or more written to the journal (fjall's
+    /// default). A database setting, not persisted: every open applies its own.
+    pub journal_lz4: bool,
 }
 
 impl Default for FjallOptions {
@@ -295,6 +427,8 @@ impl Default for FjallOptions {
             data_block_hash_percent: 0,
             data_block_restart_interval: 0,
             deferred: DeferredPersist::default(),
+            kv_separation: None,
+            journal_lz4: true,
         }
     }
 }
@@ -303,12 +437,14 @@ impl FjallOptions {
     /// The tuning of `Db::open_fjall_wal`: single keyspace, LZ4 on every
     /// level, 4 KiB blocks, index and filter blocks pinned, Deferred commits
     /// left in the journal buffer (the WAL in front holds every acknowledged
-    /// commit).
+    /// commit), values of 1 KiB or more in blob files
+    /// ([`FjallKvSeparation::for_wal`]).
     pub fn for_wal() -> FjallOptions {
         FjallOptions {
             compression: FjallCompression::Lz4,
             pin_index_and_filters: true,
             deferred: DeferredPersist::JournalBuffer,
+            kv_separation: Some(FjallKvSeparation::for_wal()),
             ..FjallOptions::default()
         }
     }
@@ -325,6 +461,9 @@ impl FjallOptions {
                 "fjall memtable_bytes {} below 64 KiB",
                 self.memtable_bytes
             )));
+        }
+        if let Some(kv) = &self.kv_separation {
+            kv.validate()?;
         }
         Ok(())
     }
@@ -347,6 +486,9 @@ impl FjallOptions {
         if self.data_block_hash_percent > 0 {
             let ratio = f32::from(self.data_block_hash_percent) / 100.0;
             opts = opts.data_block_hash_ratio_policy(HashRatioPolicy::all(ratio));
+        }
+        if let Some(kv) = &self.kv_separation {
+            opts = opts.with_kv_separation(Some(kv.fjall_options()));
         }
         match self.compression {
             FjallCompression::FjallDefault => opts,
@@ -387,6 +529,9 @@ pub struct FjallStore {
     dir: PathBuf,
     /// Taken before fjall's own writer lock (see the module documentation).
     writer: Mutex<()>,
+    /// Read by the compaction filter of every keyspace ([`BlobRewrite`]):
+    /// set by `compact` while its compaction copies every live blob.
+    rewrite_blobs: Arc<AtomicBool>,
 }
 
 impl fmt::Debug for FjallStore {
@@ -422,8 +567,13 @@ impl FjallStore {
         opts.validate()?;
         let layout = opts.layout;
         let dir = std::path::absolute(dir.as_ref())?;
+        let rewrite_blobs = Arc::new(AtomicBool::new(false));
+        let factory: Arc<dyn Factory> = Arc::new(BlobRewrite(Arc::clone(&rewrite_blobs)));
+        let journal_compression = if opts.journal_lz4 { CompressionType::Lz4 } else { CompressionType::None };
         let db = SingleWriterTxDatabase::builder(&dir)
             .cache_size(u64::try_from(cache_bytes).unwrap_or(u64::MAX))
+            .journal_compression(journal_compression)
+            .with_compaction_filter_factories(Arc::new(move |_: &str| Some(Arc::clone(&factory))))
             .open()
             .map_err(Error::backend)?;
         let keyspaces = match layout {
@@ -445,7 +595,16 @@ impl FjallStore {
             }
         };
         let snapshots = (0..SNAPSHOT_SHARDS).map(|_| SnapshotSlot::default()).collect();
-        Ok(FjallStore { snapshots, db, keyspaces, layout, deferred: opts.deferred, dir, writer: Mutex::new(()) })
+        Ok(FjallStore {
+            snapshots,
+            db,
+            keyspaces,
+            layout,
+            deferred: opts.deferred,
+            dir,
+            writer: Mutex::new(()),
+            rewrite_blobs,
+        })
     }
 
     /// Database directory (absolute).
@@ -459,6 +618,35 @@ impl FjallStore {
 
     pub fn deferred_persist(&self) -> DeferredPersist {
         self.deferred
+    }
+
+    /// Whether the keyspaces store large values in blob files (decided when
+    /// the directory was created).
+    pub fn kv_separated(&self) -> bool {
+        self.distinct_keyspaces().iter().any(|ks| ks.inner().is_kv_separated())
+    }
+
+    /// Blob files of every keyspace (diagnostics and tests).
+    pub fn blob_file_count(&self) -> usize {
+        self.distinct_keyspaces().iter().map(|ks| ks.inner().blob_file_count()).sum()
+    }
+
+    /// Bytes of the blob files taken by blobs no table references any more,
+    /// as far as compactions have found out (diagnostics and tests).
+    pub fn stale_blob_bytes(&self) -> u64 {
+        self.distinct_keyspaces().iter().map(|ks| ks.inner().fragmented_blob_bytes()).sum()
+    }
+
+    /// What fjall's write backpressure looks at, the largest over the
+    /// keyspaces: (sealed memtables waiting for their flush, level-0 runs).
+    /// After each commit, fjall 3.1.10 (`Keyspace::local_backpressure`) makes
+    /// the committing thread sleep 100 ms per check while 4 or more memtables
+    /// are sealed, spin from 20 level-0 runs and sleep from 30 (diagnostics).
+    pub fn write_pressure(&self) -> (usize, usize) {
+        self.distinct_keyspaces().iter().fold((0, 0), |(sealed, l0), ks| {
+            let ks = ks.inner();
+            (sealed.max(ks.sealed_memtable_count()), l0.max(ks.tree.l0_run_count()))
+        })
     }
 
     /// Read snapshots currently kept for reuse (diagnostics and tests).
@@ -507,6 +695,29 @@ impl FjallStore {
             FjallLayout::SingleKeyspace => &self.keyspaces[..1],
             FjallLayout::KeyspacePerTable => &self.keyspaces,
         }
+    }
+
+    /// Blob garbage collection of a key-value-separated keyspace whose tables
+    /// were just merged by a major compaction (module documentation,
+    /// *Key-value separation*). A compaction drops the blob files that were
+    /// dead, and copies the stale ones, by what it knew when it started: the
+    /// garbage its own merge finds is acted on by the next one.
+    fn collect_blob_garbage(&self, ks: &Keyspace) -> Result<()> {
+        if ks.fragmented_blob_bytes() == 0 {
+            return Ok(());
+        }
+        // Drops the dead blob files, copies those past the staleness threshold.
+        ks.major_compact().map_err(Error::backend)?;
+        if ks.fragmented_blob_bytes() == 0 {
+            return Ok(());
+        }
+        // The rest: copy every live blob to new blob files...
+        self.rewrite_blobs.store(true, Ordering::SeqCst);
+        let copied = ks.major_compact();
+        self.rewrite_blobs.store(false, Ordering::SeqCst);
+        copied.map_err(Error::backend)?;
+        // ...which leaves the old ones dead: dropped by one more compaction.
+        ks.major_compact().map_err(Error::backend)
     }
 
     fn encode_key<'k>(&self, table: Table, key: &'k [u8]) -> Cow<'k, [u8]> {
@@ -816,8 +1027,10 @@ impl Store for FjallStore {
     }
 
     /// Seals and flushes every memtable, runs a major compaction of every
-    /// keyspace (drops overwritten versions and tombstones), then releases the
-    /// superseded versions so the replaced table files are deleted now.
+    /// keyspace (drops overwritten versions and tombstones) and, in a
+    /// key-value-separated one, collects the blob garbage (up to 3 more major
+    /// compactions, see *Key-value separation*), then releases the superseded
+    /// versions so the replaced table and blob files are deleted now.
     /// Always `Ok(true)`.
     fn compact(&mut self) -> Result<bool> {
         // Cached snapshots would hold the versions the compaction drops.
@@ -826,7 +1039,11 @@ impl Store for FjallStore {
         }
         self.flush_memtables()?;
         for ks in self.distinct_keyspaces() {
-            ks.inner().major_compact().map_err(Error::backend)?;
+            let ks = ks.inner();
+            ks.major_compact().map_err(Error::backend)?;
+            if ks.is_kv_separated() {
+                self.collect_blob_garbage(ks)?;
+            }
         }
         // lsm-tree keeps the newest version older than its GC watermark, i.e.
         // the one that still lists the pre-compaction tables, until a later
@@ -851,6 +1068,34 @@ impl Store for FjallStore {
 
     fn backend_name(&self) -> &'static str {
         "fjall"
+    }
+}
+
+/// Compaction filter factory of every keyspace. Its filters keep every item,
+/// except in the compaction `FjallStore::compact` runs with the flag set:
+/// there they replace each separated value by itself, which makes fjall
+/// write it to a new blob file and count the old blob as garbage.
+struct BlobRewrite(Arc<AtomicBool>);
+
+impl Factory for BlobRewrite {
+    fn name(&self) -> &str {
+        "babeldb.blob-rewrite"
+    }
+
+    fn make_filter(&self, _: &FilterContext) -> Box<dyn CompactionFilter> {
+        Box::new(RewriteBlobs(self.0.load(Ordering::SeqCst)))
+    }
+}
+
+/// Whether this compaction copies every live blob.
+struct RewriteBlobs(bool);
+
+impl CompactionFilter for RewriteBlobs {
+    fn filter_item(&mut self, item: ItemAccessor<'_>, _: &FilterContext) -> CompactionFilterResult {
+        if self.0 && item.is_indirection() {
+            return Ok(Verdict::ReplaceValue(item.value()?));
+        }
+        Ok(Verdict::Keep)
     }
 }
 

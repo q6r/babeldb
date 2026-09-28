@@ -616,7 +616,9 @@ fn fjall_system(name: &str) -> Option<(BabelEngine, bool)> {
 /// `BABEL_FJALL_POINT_HITS` = `1` (no last-level filters), `BABEL_FJALL_PIN` = `1` | `0` (index and
 /// filter blocks pinned), `BABEL_FJALL_HASH` = data block hash index percent,
 /// `BABEL_FJALL_RESTART` = data block restart interval,
-/// `BABEL_FJALL_DEFERRED` = `os` | `buffer`.
+/// `BABEL_FJALL_DEFERRED` = `os` | `buffer`, `BABEL_FJALL_KV` = `off` | key-value separation
+/// threshold bytes, `BABEL_FJALL_BLOB_MB` = blob file size, `BABEL_FJALL_BLOB_LZ4` = `1` | `0`,
+/// `BABEL_FJALL_JOURNAL_LZ4` = `1` | `0`.
 #[cfg(feature = "fjall")]
 fn fjall_options() -> R<FjallOptions> {
     let env = |k: &str| std::env::var(k).ok();
@@ -653,6 +655,24 @@ fn fjall_options() -> R<FjallOptions> {
             "buffer" => DeferredPersist::JournalBuffer,
             other => return Err(format!("BABEL_FJALL_DEFERRED={other}").into()),
         };
+    }
+    if let Some(v) = env("BABEL_FJALL_KV") {
+        if v == "off" {
+            o.kv_separation = None;
+        } else {
+            o.kv_separation.get_or_insert_with(Default::default).threshold_bytes = u32::try_from(parse_count(&v)?)?;
+        }
+    }
+    if let Some(kv) = o.kv_separation.as_mut() {
+        if let Some(v) = env("BABEL_FJALL_BLOB_MB") {
+            kv.blob_file_bytes = parse_count(&v)? << 20;
+        }
+        if let Some(v) = env("BABEL_FJALL_BLOB_LZ4") {
+            kv.lz4 = v == "1";
+        }
+    }
+    if let Some(v) = env("BABEL_FJALL_JOURNAL_LZ4") {
+        o.journal_lz4 = v == "1";
     }
     Ok(o)
 }
