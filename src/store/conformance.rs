@@ -261,6 +261,24 @@ fn check_table<T: ReadTxn + ?Sized>(
             Some(v.as_slice()),
         )?;
     }
+    // get_many: the same values, in order, None for a missing key.
+    let missing: &[u8] = b"\x00get_many missing\xff";
+    let mut keys: Vec<&[u8]> = model.keys().map(Vec::as_slice).collect();
+    if !model.contains_key(missing) {
+        keys.insert(keys.len() / 2, missing);
+    }
+    let got = t.get_many(table, &keys)?;
+    ensure(got.len() == keys.len(), check, || {
+        format!("{label}: get_many({table:?}) returned {} values for {} keys", got.len(), keys.len())
+    })?;
+    for (k, v) in keys.iter().zip(&got) {
+        ensure_value(
+            check,
+            || format!("{label}: get_many({table:?}) at {}", show(k)),
+            v.as_deref(),
+            model.get(*k).map(Vec::as_slice),
+        )?;
+    }
     for reverse in [false, true] {
         scan_matches(check, label, t, table, model, Scan::all(reverse))?;
     }

@@ -696,6 +696,17 @@ impl ReadTxn for RedbWrite<'_> {
     fn len(&self, table: Table) -> Result<u64> {
         self.open(table)?.len().map_err(Error::backend)
     }
+
+    /// One table open for the whole batch (`get` pays one per key).
+    fn get_many(&self, table: Table, keys: &[&[u8]]) -> Result<Vec<Option<Vec<u8>>>> {
+        let t = self.open(table)?;
+        keys.iter()
+            .map(|&key| {
+                let value = t.get(key).map_err(Error::backend)?;
+                Ok(value.map(|v| v.value().to_vec()))
+            })
+            .collect()
+    }
 }
 
 impl WriteTxn for RedbWrite<'_> {

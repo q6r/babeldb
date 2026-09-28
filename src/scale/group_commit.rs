@@ -9,6 +9,14 @@
 //! optionally waits up to `max_delay` for more, calls [`BatchSink::apply`] ONCE
 //! and completes every waiter with its own per-operation results.
 //!
+//! Preparation: before queueing a request, the submitting thread reserves its
+//! room in the queue and hands it to [`BatchSink::prepare`] (validation and
+//! encoding, for a [`crate::Db`]), so that work runs in parallel in the
+//! callers' threads and the writer thread only runs transactions
+//! ([`BatchSink::apply_prepared`]). A batch never mixes prepared and
+//! unprepared requests (the kind of request ends a batch when it changes;
+//! order is kept). A panic in `prepare` fails that request only.
+//!
 //! Guarantees:
 //! - Order: requests are applied in queue (submission) order, so operations
 //!   from one thread, and all operations on one key, keep their order. A
@@ -27,14 +35,14 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use super::{
-    BatchSink, OpResult, OwnedOp, lock, panic_message, replicate_error, wait, wait_timeout,
+    BatchSink, OpResult, OwnedOp, SinkOps, lock, panic_message, replicate_error, wait, wait_timeout,
 };
-use crate::engine::{Expect, Revision};
+use crate::engine::{Expect, PreparedOp, Revision};
 use crate::error::{Error, Result};
 use crate::store::Durability;
 
@@ -322,12 +330,20 @@ fn taken_error() -> Error {
     Error::InvalidArgument("group commit: the result was already taken".into())
 }
 
+fn prepare_panicked(payload: &(dyn std::any::Any + Send)) -> Error {
+    Error::Backend(format!(
+        "group commit: preparing the request panicked ({}); nothing of it was applied",
+        panic_message(payload)
+    ))
+}
+
 /// Error of [`GroupCommitter::try_submit`].
 #[derive(Debug)]
 pub enum TrySubmitError {
     /// The queue is full; the operations are handed back untouched.
     Full(Vec<OwnedOp>),
-    /// The committer is shut down or its writer thread died.
+    /// The committer is shut down or its writer thread died (or preparing
+    /// the request panicked: nothing of it was applied).
     Closed(Error),
 }
 
@@ -427,7 +443,9 @@ fn bump(counter: &AtomicU64, n: u64) {
 
 enum Item {
     Write {
-        ops: Vec<OwnedOp>,
+        ops: SinkOps,
+        /// Operations submitted (`ops` holds one per operation).
+        n: usize,
         bytes: usize,
         done: Completer<Vec<OpResult>>,
     },
@@ -441,6 +459,9 @@ struct State {
     /// Queued write operations + one per flush marker.
     queued_ops: usize,
     queued_bytes: usize,
+    /// Room held by requests being prepared (not queued yet).
+    reserved_ops: usize,
+    reserved_bytes: usize,
     /// Shutdown requested: no new submissions.
     closed: bool,
     /// The writer loop ended (drained or died).
@@ -466,12 +487,24 @@ impl State {
         }
     }
 
-    /// An oversized request is admitted when no write is queued, so it can
-    /// never wait forever.
+    /// An oversized request is admitted when no write is queued or being
+    /// prepared, so it can never wait forever.
     fn has_room(&self, ops: usize, bytes: usize, cfg: &GroupCommitConfig) -> bool {
-        self.queued_ops == 0
-            || (self.queued_ops.saturating_add(ops) <= cfg.queue_max_ops
-                && self.queued_bytes.saturating_add(bytes) <= cfg.queue_max_bytes)
+        let held_ops = self.queued_ops.saturating_add(self.reserved_ops);
+        let held_bytes = self.queued_bytes.saturating_add(self.reserved_bytes);
+        held_ops == 0
+            || (held_ops.saturating_add(ops) <= cfg.queue_max_ops
+                && held_bytes.saturating_add(bytes) <= cfg.queue_max_bytes)
+    }
+
+    fn reserve(&mut self, ops: usize, bytes: usize) {
+        self.reserved_ops += ops;
+        self.reserved_bytes += bytes;
+    }
+
+    fn unreserve(&mut self, ops: usize, bytes: usize) {
+        self.reserved_ops -= ops;
+        self.reserved_bytes -= bytes;
     }
 }
 
@@ -488,7 +521,7 @@ struct Shared {
 impl Shared {
     /// Push an item (the caller checked admission and room) and wake the
     /// writer if it sleeps. Consumes the guard.
-    fn push(&self, mut st: std::sync::MutexGuard<'_, State>, item: Item, ops: usize, bytes: usize) {
+    fn push(&self, mut st: MutexGuard<'_, State>, item: Item, ops: usize, bytes: usize) {
         st.queue.push_back(item);
         st.queued_ops += ops;
         st.queued_bytes += bytes;
@@ -499,8 +532,18 @@ impl Shared {
         }
     }
 
+    /// Release the guard after room was freed without queueing anything:
+    /// blocked submitters may fit now.
+    fn release(&self, st: MutexGuard<'_, State>) {
+        let wake = st.blocked_submitters > 0;
+        drop(st);
+        if wake {
+            self.space.notify_all();
+        }
+    }
+
     /// Wait until `ops` / `bytes` fit (or the committer stops).
-    fn wait_for_room(&self, ops: usize, bytes: usize) -> Result<std::sync::MutexGuard<'_, State>> {
+    fn wait_for_room(&self, ops: usize, bytes: usize) -> Result<MutexGuard<'_, State>> {
         let mut st = lock(&self.state);
         let mut counted = false;
         loop {
@@ -530,10 +573,14 @@ impl Shared {
 pub struct GroupCommitter {
     shared: Arc<Shared>,
     handle: Mutex<Option<JoinHandle<()>>>,
+    /// The sink, for [`BatchSink::prepare`] in the submitting threads (read
+    /// lock held while preparing); released by `shutdown`.
+    sink: RwLock<Option<Arc<dyn BatchSink>>>,
 }
 
 impl GroupCommitter {
-    /// Spawn the writer thread; it owns `sink` until shutdown.
+    /// Spawn the writer thread; it owns `sink` until shutdown (submitting
+    /// threads use it only for [`BatchSink::prepare`]).
     pub fn new<K: BatchSink + 'static>(sink: K, cfg: GroupCommitConfig) -> Result<GroupCommitter> {
         cfg.validate()?;
         let shared = Arc::new(Shared {
@@ -541,6 +588,8 @@ impl GroupCommitter {
                 queue: VecDeque::new(),
                 queued_ops: 0,
                 queued_bytes: 0,
+                reserved_ops: 0,
+                reserved_bytes: 0,
                 closed: false,
                 exited: false,
                 dead: None,
@@ -553,13 +602,15 @@ impl GroupCommitter {
             counters: Counters::default(),
             cfg,
         });
-        let for_writer = shared.clone();
+        let sink = Arc::new(sink);
+        let for_writer = (shared.clone(), sink.clone());
         let handle = thread::Builder::new()
             .name(shared.cfg.thread_name.clone())
-            .spawn(move || writer_main(sink, for_writer))?;
+            .spawn(move || writer_main(for_writer.1, for_writer.0))?;
         Ok(GroupCommitter {
             shared,
             handle: Mutex::new(Some(handle)),
+            sink: RwLock::new(Some(sink)),
         })
     }
 
@@ -568,7 +619,9 @@ impl GroupCommitter {
     }
 
     /// Enqueue a request without waiting for its commit. Blocks only while
-    /// the queue is full (backpressure). An empty request completes at once.
+    /// the queue is full (backpressure); the request is prepared
+    /// ([`BatchSink::prepare`]) in this thread once its room is reserved. An
+    /// empty request completes at once.
     pub fn submit(&self, ops: Vec<OwnedOp>) -> Result<Ticket> {
         if ops.is_empty() {
             return Ok(Pending::ready(Ok(Vec::new())));
@@ -576,15 +629,12 @@ impl GroupCommitter {
         let n = ops.len();
         let bytes = request_bytes(&ops);
         let st = self.shared.wait_for_room(n, bytes)?;
-        let (done, ticket) = completion_pair();
-        self.shared
-            .push(st, Item::Write { ops, bytes, done }, n, bytes);
-        bump(&self.shared.counters.requests, 1);
-        Ok(ticket)
+        self.enqueue(st, ops, n, bytes)
     }
 
-    /// Enqueue a request without ever blocking: a full queue hands the
-    /// operations back in [`TrySubmitError::Full`].
+    /// Enqueue a request without ever blocking on the queue: a full queue
+    /// hands the operations back, unprepared, in [`TrySubmitError::Full`].
+    /// (Preparing an admitted request still takes the time it takes.)
     pub fn try_submit(&self, ops: Vec<OwnedOp>) -> std::result::Result<Ticket, TrySubmitError> {
         if ops.is_empty() {
             return Ok(Pending::ready(Ok(Vec::new())));
@@ -598,11 +648,63 @@ impl GroupCommitter {
         if !st.has_room(n, bytes, &self.shared.cfg) {
             return Err(TrySubmitError::Full(ops));
         }
+        self.enqueue(st, ops, n, bytes)
+            .map_err(TrySubmitError::Closed)
+    }
+
+    /// Reserve the room `st` shows is free, prepare `ops` without any lock
+    /// of the queue, then queue them (unless the committer stopped
+    /// meanwhile).
+    fn enqueue(
+        &self,
+        mut st: MutexGuard<'_, State>,
+        ops: Vec<OwnedOp>,
+        n: usize,
+        bytes: usize,
+    ) -> Result<Ticket> {
+        st.reserve(n, bytes);
+        drop(st);
+        let prepared = self.prepare(ops);
+        let mut st = lock(&self.shared.state);
+        st.unreserve(n, bytes);
+        let ops = match prepared {
+            Ok(ops) => ops,
+            Err(e) => {
+                self.shared.release(st);
+                return Err(e);
+            }
+        };
+        if let Some(e) = st.admission_error() {
+            self.shared.release(st);
+            return Err(e);
+        }
         let (done, ticket) = completion_pair();
-        self.shared
-            .push(st, Item::Write { ops, bytes, done }, n, bytes);
+        self.shared.push(
+            st,
+            Item::Write {
+                ops,
+                n,
+                bytes,
+                done,
+            },
+            n,
+            bytes,
+        );
         bump(&self.shared.counters.requests, 1);
         Ok(ticket)
+    }
+
+    /// [`BatchSink::prepare`] in the calling thread. A panic fails this
+    /// request only.
+    fn prepare(&self, ops: Vec<OwnedOp>) -> Result<SinkOps> {
+        let sink = self.sink.read().unwrap_or_else(PoisonError::into_inner);
+        let Some(sink) = sink.as_ref() else {
+            return Err(closed_error());
+        };
+        match panic::catch_unwind(AssertUnwindSafe(|| sink.prepare(ops))) {
+            Ok(prepared) => Ok(prepared),
+            Err(payload) => Err(prepare_panicked(payload.as_ref())),
+        }
     }
 
     /// Submit and wait: one result per operation, in order.
@@ -660,9 +762,16 @@ impl GroupCommitter {
     /// Reject new work, drain the queue (buffered mode: make it durable) and
     /// join the writer. Idempotent. Returns the error of the final durability
     /// step, or an error if the writer thread died. Must not be called from
-    /// the sink.
+    /// the sink. Once it returns, this committer holds no reference to the
+    /// sink (a request still being prepared is waited for, then refused).
     pub fn shutdown(&self) -> Result<()> {
         self.close();
+        // Wait for the requests being prepared (they are refused: the queue
+        // is closed) and drop this handle's reference to the sink.
+        self.sink
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
         {
             let mut handle = lock(&self.handle);
             if let Some(h) = handle.take()
@@ -755,18 +864,38 @@ pub(crate) fn single_result(results: Vec<OpResult>) -> OpResult {
 
 #[derive(Default)]
 struct Batch {
+    /// The operations of the requests taken, in order: all unprepared
+    /// (`ops`) or all prepared (`prepared`).
     ops: Vec<OwnedOp>,
+    prepared: Vec<PreparedOp>,
+    /// Operations taken (submitted count).
+    n: usize,
     bytes: usize,
     /// (completion, number of operations) per request, in batch order.
     waiters: Vec<(Completer<Vec<OpResult>>, usize)>,
     flushes: Vec<Completer<()>>,
 }
 
+impl Batch {
+    /// Whether a request of this kind can join the batch.
+    fn same_kind(&self, ops: &SinkOps) -> bool {
+        self.n == 0 || matches!(ops, SinkOps::Prepared(_)) == !self.prepared.is_empty()
+    }
+
+    fn append(&mut self, ops: SinkOps) {
+        match ops {
+            SinkOps::Owned(mut ops) => self.ops.append(&mut ops),
+            SinkOps::Prepared(mut ops) => self.prepared.append(&mut ops),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Take {
     /// The queue is empty.
     Drained,
-    /// The batch reached a limit.
+    /// The batch reached a limit, or the next request is of the other kind
+    /// (prepared / unprepared).
     Full,
     /// A flush marker ends the batch.
     Flush,
@@ -885,7 +1014,7 @@ fn writer_loop<K: BatchSink + ?Sized>(sink: &K, sh: &Shared) -> Result<()> {
         let mut take = take_batch(&mut st, cfg, &mut batch);
         if take == Take::Drained
             && !cfg.max_delay.is_zero()
-            && !batch.ops.is_empty()
+            && batch.n > 0
             && !st.closed
             && let Some(until) = Instant::now().checked_add(cfg.max_delay)
         {
@@ -919,7 +1048,7 @@ fn writer_loop<K: BatchSink + ?Sized>(sink: &K, sh: &Shared) -> Result<()> {
                 || closing
                 || unsynced.deadline(interval).is_some_and(|d| now >= d)
                 || unsynced.bytes.saturating_add(batch.bytes) >= max_pending);
-        if !batch.ops.is_empty() {
+        if batch.n > 0 {
             let durability = if !buffered || owe_durable {
                 Durability::Immediate
             } else {
@@ -987,7 +1116,7 @@ fn writer_loop<K: BatchSink + ?Sized>(sink: &K, sh: &Shared) -> Result<()> {
 /// Move requests from the queue into `batch` without splitting any request.
 fn take_batch(st: &mut State, cfg: &GroupCommitConfig, batch: &mut Batch) -> Take {
     loop {
-        if batch.ops.len() >= cfg.max_batch_ops || batch.bytes >= cfg.max_batch_bytes {
+        if batch.n >= cfg.max_batch_ops || batch.bytes >= cfg.max_batch_bytes {
             return Take::Full;
         }
         let Some(item) = st.queue.pop_front() else {
@@ -995,22 +1124,30 @@ fn take_batch(st: &mut State, cfg: &GroupCommitConfig, batch: &mut Batch) -> Tak
         };
         match item {
             Item::Write {
-                mut ops,
+                ops,
+                n,
                 bytes,
                 done,
             } => {
-                let fits = batch.ops.is_empty()
-                    || (batch.ops.len() + ops.len() <= cfg.max_batch_ops
+                let fits = batch.n == 0
+                    || (batch.same_kind(&ops)
+                        && batch.n + n <= cfg.max_batch_ops
                         && batch.bytes.saturating_add(bytes) <= cfg.max_batch_bytes);
                 if !fits {
-                    st.queue.push_front(Item::Write { ops, bytes, done });
+                    st.queue.push_front(Item::Write {
+                        ops,
+                        n,
+                        bytes,
+                        done,
+                    });
                     return Take::Full;
                 }
-                st.queued_ops -= ops.len();
+                st.queued_ops -= n;
                 st.queued_bytes -= bytes;
-                batch.waiters.push((done, ops.len()));
+                batch.waiters.push((done, n));
+                batch.n += n;
                 batch.bytes = batch.bytes.saturating_add(bytes);
-                batch.ops.append(&mut ops);
+                batch.append(ops);
             }
             Item::Flush { done } => {
                 st.queued_ops -= 1;
@@ -1028,16 +1165,22 @@ fn take_batch(st: &mut State, cfg: &GroupCommitConfig, batch: &mut Batch) -> Tak
     }
 }
 
-/// One `apply` call for the whole batch (the operations are released).
+/// One `apply` (or `apply_prepared`) call for the whole batch (the
+/// operations are released).
 fn apply_batch<K: BatchSink + ?Sized>(
     sink: &K,
     sh: &Shared,
     batch: &mut Batch,
     durability: Durability,
 ) -> Result<Vec<OpResult>> {
-    let n = batch.ops.len();
-    let result = sink.apply(&batch.ops, durability);
+    let n = batch.n;
+    let result = if batch.prepared.is_empty() {
+        sink.apply(&batch.ops, durability)
+    } else {
+        sink.apply_prepared(std::mem::take(&mut batch.prepared), durability)
+    };
     batch.ops.clear();
+    batch.n = 0;
     batch.bytes = 0;
     let c = &sh.counters;
     bump(&c.batches, 1);
