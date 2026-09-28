@@ -8,7 +8,7 @@ description = "Embedded key-value store inspired by the Library of Babel: revers
 
 [dependencies]
 blake3 = "1.8.7"
-fjall = { version = "3.1.10", optional = true }
+fjall = { version = "=3.1.10", optional = true } # pinned: store/fjall.rs uses doc-hidden APIs (blob GC)
 heed = { version = "0.22.1", optional = true }
 lz4_flex = "0.14.0"
 mongodb = { version = "3.9.1", features = ["sync"], optional = true }
