@@ -19,6 +19,13 @@
 //!   behind the babeldb TCP server (`cli::server`, localhost, binary protocol;
 //!   every connection's writes share the server's group committer): the
 //!   like-for-like comparison with the client/server databases.
+//! - `babel-fjall-wal`, `babel-fjall-wal-raw`, `babel-fjall-wal-dict` and their `-tcp`
+//!   counterparts (`babel-fjall-wal-tcp`, ...; feature `fjall`, i.e. `--features compare,fjall`):
+//!   the same engines on fjall, an LSM-tree (`Db::open_fjall_wal`, `FjallOptions::for_wal`;
+//!   `BABEL_FJALL_*` environment variables override the tuning, see `fjall_options`), behind the
+//!   same write-through WAL as `babel-wal*`. Their `space` first flushes the memtables to tables,
+//!   the counterpart of the CHECKPOINT / fsync the PostgreSQL and MongoDB targets run; fjall's
+//!   journal, a log like the WAL, is excluded and reported next to it.
 //! - `postgres`: `messages(channel_id bigint, id bigint, payload bytea,
 //!   primary key (channel_id, id))`, prepared statements, one connection per thread.
 //! - `mongo`: collection `messages`, `_id = {c, m}` (both int64), `p` = BinData
@@ -66,6 +73,8 @@ use babeldb::scale::chat::message_key;
 use babeldb::scale::group_commit::{GroupCommitConfig, GroupCommitter, WriteDurability};
 use babeldb::config::{WalConfig, WalSync};
 use babeldb::store::Store;
+#[cfg(feature = "fjall")]
+use babeldb::store::{fjall::{DeferredPersist, FjallCompression, FjallOptions, FjallStore}, wal::WalStore};
 use babeldb::{BatchOp, Config, Db, Expect, ScanItem, ScanOptions};
 use mongodb::bson::spec::BinarySubtype;
 use mongodb::bson::{Binary, Bson, Document, doc};
@@ -391,6 +400,7 @@ struct BabelTarget<S: Store> {
     committer: Option<Arc<GroupCommitter>>,
     /// TCP server and its address (TCP systems, while running).
     server: Option<(ServerHandle, SocketAddr)>,
+    space: SpaceProbe<S>,
 }
 
 fn babel_open(
@@ -410,12 +420,122 @@ fn babel_open(
     };
     let path = dir.join("babel.redb");
     Ok(match wal {
-        None => Box::new(babel_target(p, name, engine, tcp, tcp_threads, Db::open(path, cfg)?)?),
+        None => Box::new(babel_target(p, name, engine, tcp, tcp_threads, Db::open(path, cfg)?, SpaceProbe::redb())?),
         Some(sync) => {
             let wal_cfg = WalConfig { sync, ..WalConfig::default() };
-            Box::new(babel_target(p, name, engine, tcp, tcp_threads, Db::open_wal_with(path, cfg, wal_cfg)?)?)
+            let db = Db::open_wal_with(path, cfg, wal_cfg)?;
+            Box::new(babel_target(p, name, engine, tcp, tcp_threads, db, SpaceProbe::redb())?)
         }
     })
+}
+
+/// What `space` measures for a babeldb backend: the label of the number, and what runs first so
+/// that the data files hold every loaded record (the PostgreSQL and MongoDB targets force a
+/// checkpoint for the same reason; its duration is printed, it is not part of `load`).
+struct SpaceProbe<S: Store> {
+    label: &'static str,
+    settle: Option<Settle<S>>,
+}
+
+/// Brings a database's data files up to date before they are measured.
+type Settle<S> = fn(&Db<S>) -> babeldb::Result<()>;
+
+impl<S: Store> SpaceProbe<S> {
+    /// redb writes its pages into the file at every commit: nothing to settle.
+    fn redb() -> Self {
+        SpaceProbe { label: "redb file allocated", settle: None }
+    }
+}
+
+/// `babel-fjall-wal*` systems: (engine, behind the TCP server).
+#[cfg(feature = "fjall")]
+fn fjall_system(name: &str) -> Option<(BabelEngine, bool)> {
+    Some(match name {
+        "babel-fjall-wal-raw" => (BabelEngine::Raw, false),
+        "babel-fjall-wal" => (BabelEngine::Adaptive, false),
+        "babel-fjall-wal-dict" => (BabelEngine::Dict, false),
+        "babel-fjall-wal-tcp" => (BabelEngine::Adaptive, true),
+        "babel-fjall-wal-tcp-raw" => (BabelEngine::Raw, true),
+        "babel-fjall-wal-tcp-dict" => (BabelEngine::Dict, true),
+        _ => return None,
+    })
+}
+
+/// `FjallOptions::for_wal()`, overridden by the environment (tuning runs):
+/// `BABEL_FJALL_COMPRESSION` = `lz4` | `none` | `default` (fjall's: LZ4 from level 2 on),
+/// `BABEL_FJALL_BLOCK` = data block bytes, `BABEL_FJALL_MEMTABLE_MB`,
+/// `BABEL_FJALL_POINT_HITS` = `1` (no last-level filters), `BABEL_FJALL_PIN` = `1` | `0` (index and
+/// filter blocks pinned), `BABEL_FJALL_HASH` = data block hash index percent,
+/// `BABEL_FJALL_RESTART` = data block restart interval,
+/// `BABEL_FJALL_DEFERRED` = `os` | `buffer`.
+#[cfg(feature = "fjall")]
+fn fjall_options() -> R<FjallOptions> {
+    let env = |k: &str| std::env::var(k).ok();
+    let mut o = FjallOptions::for_wal();
+    if let Some(v) = env("BABEL_FJALL_COMPRESSION") {
+        o.compression = match v.as_str() {
+            "lz4" => FjallCompression::Lz4,
+            "none" => FjallCompression::None,
+            "default" => FjallCompression::FjallDefault,
+            other => return Err(format!("BABEL_FJALL_COMPRESSION={other}").into()),
+        };
+    }
+    if let Some(v) = env("BABEL_FJALL_BLOCK") {
+        o.data_block_bytes = parse_count(&v)? as u32;
+    }
+    if let Some(v) = env("BABEL_FJALL_MEMTABLE_MB") {
+        o.memtable_bytes = parse_count(&v)? << 20;
+    }
+    if let Some(v) = env("BABEL_FJALL_POINT_HITS") {
+        o.expect_point_read_hits = v == "1";
+    }
+    if let Some(v) = env("BABEL_FJALL_PIN") {
+        o.pin_index_and_filters = v == "1";
+    }
+    if let Some(v) = env("BABEL_FJALL_HASH") {
+        o.data_block_hash_percent = u8::try_from(parse_count(&v)?)?;
+    }
+    if let Some(v) = env("BABEL_FJALL_RESTART") {
+        o.data_block_restart_interval = u8::try_from(parse_count(&v)?)?;
+    }
+    if let Some(v) = env("BABEL_FJALL_DEFERRED") {
+        o.deferred = match v.as_str() {
+            "os" => DeferredPersist::WriteToOs,
+            "buffer" => DeferredPersist::JournalBuffer,
+            other => return Err(format!("BABEL_FJALL_DEFERRED={other}").into()),
+        };
+    }
+    Ok(o)
+}
+
+/// The `babel-fjall-wal*` target called `name` (`None` for other names): fjall in
+/// `<dir>/<name>/babel.fjall`, its WAL (`WalSync::WriteThrough`, as `babel-wal*`) next to it.
+#[cfg(feature = "fjall")]
+fn fjall_open(p: &Params, name: &str, tcp_threads: usize) -> R<Option<Box<dyn Target>>> {
+    let Some((engine, tcp)) = fjall_system(name) else {
+        return Ok(None);
+    };
+    let dir = p.dir.join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)?;
+    let cfg = match engine {
+        BabelEngine::Raw => Config::raw_only(),
+        BabelEngine::Adaptive | BabelEngine::Dict => Config::adaptive(),
+    };
+    let opts = fjall_options()?;
+    println!("[{name}] fjall      {opts:?}");
+    let wal_cfg = WalConfig { sync: WalSync::WriteThrough, ..WalConfig::default() };
+    let db = Db::open_fjall_wal_with(dir.join("babel.fjall"), cfg, wal_cfg, &opts)?;
+    let space: SpaceProbe<WalStore<FjallStore>> = SpaceProbe {
+        label: "fjall tables after a memtable flush (its checkpoint)",
+        settle: Some(|db| db.store().inner().flush_memtables()),
+    };
+    Ok(Some(Box::new(babel_target(p, name, engine, tcp, tcp_threads, db, space)?)))
+}
+
+#[cfg(not(feature = "fjall"))]
+fn fjall_open(_: &Params, _: &str, _: usize) -> R<Option<Box<dyn Target>>> {
+    Ok(None)
 }
 
 fn babel_target<S: Store>(
@@ -425,6 +545,7 @@ fn babel_target<S: Store>(
     tcp: bool,
     tcp_threads: usize,
     db: Db<S>,
+    space: SpaceProbe<S>,
 ) -> R<BabelTarget<S>> {
     if engine == BabelEngine::Dict {
         // Trained on the first messages of the workload, before anything is
@@ -454,6 +575,7 @@ fn babel_target<S: Store>(
         tcp_threads: tcp.then_some(tcp_threads),
         committer: None,
         server: None,
+        space,
     };
     target.start()?;
     Ok(target)
@@ -490,15 +612,16 @@ impl<S: Store> BabelTarget<S> {
     }
 
     /// Data files only (the WAL file, like PostgreSQL's WAL and MongoDB's
-    /// journal, is reported separately and excluded from the number).
+    /// journal, is reported separately and excluded from the number; so is
+    /// fjall's journal).
     fn describe_space(&self, what: &str) -> R<(u64, String)> {
         let s = self.db.stats()?;
-        let (data, wal) = split_wal(&s.files, |f| f.allocated_bytes.unwrap_or(f.apparent_bytes));
+        let (data, wal, journal) = split_logs(&s.files, |f| f.allocated_bytes.unwrap_or(f.apparent_bytes));
         Ok((
             data,
             format!(
-                "{what}: data files allocated, WAL file excluded (+{:.2} MB WAL; engine payload {:.2} MB)",
-                wal as f64 / 1e6,
+                "{what}: data files allocated, {}; engine payload {:.2} MB)",
+                logs_note(wal, journal),
                 s.payload_bytes() as f64 / 1e6
             ),
         ))
@@ -511,25 +634,41 @@ impl<S: Store> BabelTarget<S> {
     fn describe_compacted(&self, took: Duration) -> R<(u64, String)> {
         let s = self.db.stats()?;
         let settled = |f: &babeldb::stats::FileSize| f.allocated_bytes.map_or(f.apparent_bytes, |a| a.min(f.apparent_bytes));
-        let (data, wal) = split_wal(&s.files, settled);
+        let (data, wal, journal) = split_logs(&s.files, settled);
         Ok((
             data,
             format!(
-                "data files after Db::compact in {:.2}s: min(apparent, allocated), WAL file excluded (+{:.2} MB WAL; engine payload {:.2} MB)",
+                "data files after Db::compact in {:.2}s: min(apparent, allocated), {}; engine payload {:.2} MB)",
                 took.as_secs_f64(),
-                wal as f64 / 1e6,
+                logs_note(wal, journal),
                 s.payload_bytes() as f64 / 1e6
             ),
         ))
     }
 }
 
-/// (data bytes, WAL bytes) of a store's files, sized by `size`.
-fn split_wal(files: &[babeldb::stats::FileSize], size: impl Fn(&babeldb::stats::FileSize) -> u64) -> (u64, u64) {
-    let is_wal = |f: &babeldb::stats::FileSize| f.path.extension().is_some_and(|e| e == "wal");
-    let data = files.iter().filter(|f| !is_wal(f)).map(&size).sum();
-    let wal = files.iter().filter(|f| is_wal(f)).map(&size).sum();
-    (data, wal)
+/// (data bytes, WAL bytes, fjall journal bytes) of a store's files, sized by `size`.
+fn split_logs(files: &[babeldb::stats::FileSize], size: impl Fn(&babeldb::stats::FileSize) -> u64) -> (u64, u64, u64) {
+    let ext = |f: &babeldb::stats::FileSize, e: &str| f.path.extension().is_some_and(|x| x == e);
+    let sum = |keep: &dyn Fn(&babeldb::stats::FileSize) -> bool| files.iter().filter(|f| keep(f)).map(&size).sum::<u64>();
+    let wal = sum(&|f| ext(f, "wal"));
+    let journal = sum(&|f| ext(f, "jnl"));
+    let data = sum(&|f| !ext(f, "wal") && !ext(f, "jnl"));
+    (data, wal, journal)
+}
+
+/// The excluded logs, up to the engine payload. Backends without a journal of their own keep
+/// the text of the earlier rounds.
+fn logs_note(wal: u64, journal: u64) -> String {
+    if journal == 0 {
+        format!("WAL file excluded (+{:.2} MB WAL", wal as f64 / 1e6)
+    } else {
+        format!(
+            "WAL file and fjall journal excluded (+{:.2} MB WAL, +{:.2} MB journal",
+            wal as f64 / 1e6,
+            journal as f64 / 1e6
+        )
+    }
 }
 
 struct BabelSession<S: Store> {
@@ -634,7 +773,14 @@ impl<S: Store> Target for BabelTarget<S> {
         if let Some(committer) = &self.committer {
             committer.flush()?;
         }
-        self.describe_space("redb file allocated")
+        match self.space.settle {
+            None => self.describe_space(self.space.label),
+            Some(settle) => {
+                let t0 = Instant::now();
+                settle(&self.db)?;
+                self.describe_space(&format!("{} in {:.2}s", self.space.label, t0.elapsed().as_secs_f64()))
+            }
+        }
     }
 
     fn compact(&mut self) -> R<Option<(u64, String)>> {
@@ -1059,7 +1205,10 @@ fn run_system(p: &Params, name: &str, report: &mut Report) -> R<()> {
         (Some((engine, tcp, wal)), _) => babel_open(p, name, engine, tcp, wal, max_threads + 2)?,
         (None, "postgres") => Box::new(pg_open(p)?),
         (None, "mongo") => Box::new(mongo_open(p)?),
-        (None, other) => return Err(format!("unknown system {other}").into()),
+        (None, other) => match fjall_open(p, other, max_threads + 2)? {
+            Some(target) => target,
+            None => return Err(format!("unknown system {other}").into()),
+        },
     };
 
     // bulk load, 1000 messages per batch (batch generation is not timed)

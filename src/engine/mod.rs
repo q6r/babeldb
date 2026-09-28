@@ -31,6 +31,8 @@ use crate::format::{self, meta_key, SourceDescriptor, FORMAT_VERSION};
 use crate::generator::{Generator, Registry};
 use crate::planner::Planner;
 use crate::stats::{EngineCounters, Stats};
+#[cfg(feature = "fjall")]
+use crate::store::fjall::{FjallOptions, FjallStore};
 use crate::store::redb::RedbStore;
 use crate::store::wal::WalStore;
 use crate::store::{Durability, Store, Table, WriteTxn};
@@ -209,6 +211,55 @@ impl Db<WalStore<RedbStore>> {
         let path = path.as_ref();
         let wal_path = wal.wal_path(path);
         let inner = RedbStore::open(path, cfg.backend_cache_bytes)?;
+        let store = WalStore::open(inner, wal_path, wal)?;
+        Db::with_store(store, cfg)
+    }
+}
+
+/// fjall (LSM-tree, feature `fjall`) behind a write-through write-ahead log
+/// (`Db::open_fjall_wal`).
+#[cfg(feature = "fjall")]
+pub type FjallWalDb = Db<WalStore<FjallStore>>;
+
+#[cfg(feature = "fjall")]
+impl Db<FjallStore> {
+    /// Open or create an fjall database in the directory `dir` (dedicated to
+    /// it; created when missing) with fjall's default tuning
+    /// (`FjallOptions::default()`) and `backend_cache_bytes` of block cache.
+    pub fn open_fjall(dir: impl AsRef<Path>, cfg: Config) -> Result<Db<FjallStore>> {
+        Self::open_fjall_with(dir, cfg, &FjallOptions::default())
+    }
+
+    /// `open_fjall` with explicit tuning (applied when the directory is created).
+    pub fn open_fjall_with(dir: impl AsRef<Path>, cfg: Config, opts: &FjallOptions) -> Result<Db<FjallStore>> {
+        cfg.validate()?;
+        let store = FjallStore::open_with(dir, cfg.backend_cache_bytes, opts)?;
+        Db::with_store(store, cfg)
+    }
+}
+
+#[cfg(feature = "fjall")]
+impl Db<WalStore<FjallStore>> {
+    /// Open or create an fjall database in the directory `dir` behind a WAL
+    /// (`wal.wal_path(dir)`: `<dir name>.wal` next to the directory unless
+    /// `WalConfig::dir` is set), tuned by `FjallOptions::for_wal()`. As with
+    /// `open_wal`, a durable commit costs one WAL write; fjall only receives
+    /// Deferred commits, and a checkpoint is one fjall `Immediate` commit (an
+    /// fsync of its journal) instead of a flush of dirty B-tree pages. After a
+    /// crash, reopen with `open_fjall_wal`: recovery replays the commits that
+    /// only the WAL holds.
+    pub fn open_fjall_wal(dir: impl AsRef<Path>, cfg: Config, wal: WalConfig) -> Result<FjallWalDb> {
+        Self::open_fjall_wal_with(dir, cfg, wal, &FjallOptions::for_wal())
+    }
+
+    /// `open_fjall_wal` with explicit fjall tuning. With
+    /// `FjallLayout::KeyspacePerTable` every inner commit is Immediate (see
+    /// `store::fjall`), which defeats the WAL.
+    pub fn open_fjall_wal_with(dir: impl AsRef<Path>, cfg: Config, wal: WalConfig, opts: &FjallOptions) -> Result<FjallWalDb> {
+        cfg.validate()?;
+        let dir = dir.as_ref();
+        let wal_path = wal.wal_path(dir);
+        let inner = FjallStore::open_with(dir, cfg.backend_cache_bytes, opts)?;
         let store = WalStore::open(inner, wal_path, wal)?;
         Db::with_store(store, cfg)
     }
