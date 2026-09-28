@@ -1,0 +1,223 @@
+    Finished `bench` profile [optimized + debuginfo] target(s) in 0.53s
+     Running benches\compare.rs (target\release\deps\compare-67fa4b9623438596.exe)
+== babel-fjall-wal (100000 records x 512 B, relaxed)
+[babel-fjall-wal] fjall      FjallOptions { layout: SingleKeyspace, compression: Lz4, data_block_bytes: 4096, memtable_bytes: 67108864, expect_point_read_hits: false, pin_index_and_filters: true, data_block_hash_percent: 0, data_block_restart_interval: 0, deferred: JournalBuffer }
+[babel-fjall-wal] load       100000 records in 0.54s of batches -> 186000 rec/s
+[babel-fjall-wal] load-batch x1       100 ops          186 ops/s  p50    5.04ms p95    6.79ms p99    7.74ms max   15.46ms
+[babel-fjall-wal] space           29.40 MB  (fjall tables after a memtable flush (its checkpoint) in 0.15s: data files allocated, WAL file and fjall journal excluded (+16.78 MB WAL, +67.11 MB journal; engine payload 32.28 MB))
+[babel-fjall-wal] space-compacted      29.24 MB  (data files after Db::compact in 0.20s: min(apparent, allocated), WAL file and fjall journal excluded (+16.78 MB WAL, +67.11 MB journal; engine payload 32.28 MB))
+[babel-fjall-wal] put        x1       300 ops        18225 ops/s  p50    51.6us p95    79.7us p99   129.9us max   227.5us
+[babel-fjall-wal] put-mt     x1       200 ops        23314 ops/s  p50    40.3us p95    63.6us p99    82.6us max   134.7us
+[babel-fjall-wal] put-mt     x4       800 ops        81521 ops/s  p50    45.5us p95    77.1us p99   101.5us max   127.4us
+[babel-fjall-wal] put-mt     x16     3200 ops       154062 ops/s  p50    96.9us p95   151.7us p99   268.0us max   385.0us
+[babel-fjall-wal] put-mt     x64    12800 ops       157295 ops/s  p50   377.1us p95   626.2us p99   976.4us max    2.51ms
+[babel-fjall-wal] get        x1     20000 ops       163603 ops/s  p50     5.3us p95     9.7us p99    18.7us max   114.0us
+[babel-fjall-wal] get-mt     x4     40000 ops       681132 ops/s  p50     5.1us p95     8.8us p99    12.7us max   196.8us
+[babel-fjall-wal] get-mt     x16   160000 ops      1923639 ops/s  p50     5.7us p95     8.4us p99    23.4us max   10.48ms
+[babel-fjall-wal] latest     x1      5000 ops        13523 ops/s  p50    64.8us p95   143.5us p99   205.4us max   476.0us
+[babel-fjall-wal] latest-mt  x4     10000 ops        64463 ops/s  p50    56.4us p95    99.7us p99   149.2us max   374.3us
+[babel-fjall-wal] latest-mt  x16    40000 ops       160743 ops/s  p50    67.0us p95   126.6us p99   367.1us max   22.74ms
+[babel-fjall-wal] range      x1   153.4 messages per range on average
+[babel-fjall-wal] range      x1      1250 ops         3429 ops/s  p50   328.5us p95   505.2us p99   613.9us max   757.7us
+[babel-fjall-wal] range-mt   x4   154.5 messages per range on average
+[babel-fjall-wal] range-mt   x4      2500 ops        11674 ops/s  p50   362.1us p95   589.4us p99   823.5us max    3.79ms
+[babel-fjall-wal] range-mt   x16  153.4 messages per range on average
+[babel-fjall-wal] range-mt   x16    10000 ops        30300 ops/s  p50   437.4us p95   869.5us p99    2.02ms max   32.57ms
+[babel-fjall-wal] mixed95    x16    32000 ops       487197 ops/s  p50     7.8us p95    98.9us p99   224.7us max    1.49ms
+[babel-fjall-wal] mixed95-read x16    30491 ops       464223 ops/s  p50     7.5us p95    88.5us p99   125.7us max    1.49ms
+[babel-fjall-wal] mixed95-write x16     1509 ops        22974 ops/s  p50   104.9us p95   415.0us p99   629.0us max   952.8us
+[babel-fjall-wal] mixed50    x16    32000 ops       199341 ops/s  p50    83.2us p95   176.2us p99   261.6us max    3.42ms
+[babel-fjall-wal] mixed50-read x16    15923 ops        99191 ops/s  p50    10.7us p95   136.9us p99   187.7us max    1.00ms
+[babel-fjall-wal] mixed50-write x16    16077 ops       100150 ops/s  p50   107.0us p95   201.6us p99   327.7us max    3.42ms
+[babel-fjall-wal] update     x1       300 ops        17344 ops/s  p50    54.1us p95    84.1us p99   132.0us max   221.1us
+[babel-fjall-wal] update-mt  x1       200 ops        16922 ops/s  p50    55.2us p95    89.9us p99    99.8us max   149.4us
+[babel-fjall-wal] update-mt  x4       800 ops        74836 ops/s  p50    46.9us p95    89.4us p99   119.6us max   208.5us
+[babel-fjall-wal] update-mt  x16     3200 ops        79795 ops/s  p50   175.7us p95   314.2us p99   711.6us max    1.68ms
+[babel-fjall-wal] update-mt  x64    12800 ops        78142 ops/s  p50   726.2us p95    1.29ms p99    2.28ms max    4.02ms
+[babel-fjall-wal] delete     x1       300 ops        31183 ops/s  p50    28.8us p95    48.1us p99    59.6us max   188.2us
+[babel-fjall-wal] delete-mt  x1       200 ops        31115 ops/s  p50    29.1us p95    51.1us p99    79.7us max    94.8us
+[babel-fjall-wal] delete-mt  x4       800 ops        78068 ops/s  p50    43.1us p95    90.9us p99   114.6us max   148.6us
+[babel-fjall-wal] delete-mt  x16     3200 ops        96814 ops/s  p50   151.9us p95   236.0us p99   290.5us max   321.2us
+[babel-fjall-wal] delete-mt  x64    12800 ops        90897 ops/s  p50   656.5us p95    1.05ms p99    1.41ms max    1.94ms
+== babel-fjall-wal-tcp (100000 records x 512 B, relaxed)
+[babel-fjall-wal-tcp] fjall      FjallOptions { layout: SingleKeyspace, compression: Lz4, data_block_bytes: 4096, memtable_bytes: 67108864, expect_point_read_hits: false, pin_index_and_filters: true, data_block_hash_percent: 0, data_block_restart_interval: 0, deferred: JournalBuffer }
+[babel-fjall-wal-tcp] load       100000 records in 0.65s of batches -> 154130 rec/s
+[babel-fjall-wal-tcp] load-batch x1       100 ops          154 ops/s  p50    5.90ms p95    9.72ms p99   16.69ms max   16.92ms
+[babel-fjall-wal-tcp] space           29.03 MB  (fjall tables after a memtable flush (its checkpoint) in 0.14s: data files allocated, WAL file and fjall journal excluded (+16.78 MB WAL, +67.11 MB journal; engine payload 31.92 MB))
+[babel-fjall-wal-tcp] space-compacted      28.87 MB  (data files after Db::compact in 0.20s: min(apparent, allocated), WAL file and fjall journal excluded (+16.78 MB WAL, +67.11 MB journal; engine payload 31.92 MB))
+[babel-fjall-wal-tcp] put        x1       300 ops         8777 ops/s  p50   108.0us p95   154.5us p99   203.0us max   396.9us
+[babel-fjall-wal-tcp] put-mt     x1       200 ops         9047 ops/s  p50   108.1us p95   142.0us p99   166.3us max   240.2us
+[babel-fjall-wal-tcp] put-mt     x4       800 ops        36060 ops/s  p50   105.9us p95   150.1us p99   189.7us max   296.8us
+[babel-fjall-wal-tcp] put-mt     x16     3200 ops        83856 ops/s  p50   162.0us p95   286.8us p99   519.3us max    1.21ms
+[babel-fjall-wal-tcp] put-mt     x64    12800 ops        96794 ops/s  p50   437.9us p95    1.20ms p99    2.26ms max   10.59ms
+[babel-fjall-wal-tcp] get        x1     20000 ops        14457 ops/s  p50    64.5us p95    99.9us p99   159.7us max    2.44ms
+[babel-fjall-wal-tcp] get-mt     x4     40000 ops        59020 ops/s  p50    64.7us p95    87.9us p99   112.8us max    2.87ms
+[babel-fjall-wal-tcp] get-mt     x16   160000 ops       112750 ops/s  p50    82.4us p95   152.1us p99   260.2us max  224.02ms
+[babel-fjall-wal-tcp] latest     x1      5000 ops         5819 ops/s  p50   156.7us p95   263.0us p99   345.6us max    8.54ms
+[babel-fjall-wal-tcp] latest-mt  x4     10000 ops        25949 ops/s  p50   144.7us p95   218.1us p99   291.7us max    1.55ms
+[babel-fjall-wal-tcp] latest-mt  x16    40000 ops        56465 ops/s  p50   222.6us p95   422.5us p99   709.6us max   11.74ms
+[babel-fjall-wal-tcp] range      skipped: the babeldb TCP protocol has no key-range scan (SCAN_PREFIX only)
+[babel-fjall-wal-tcp] mixed95    x16    32000 ops        95603 ops/s  p50   118.7us p95   289.3us p99   415.6us max   11.04ms
+[babel-fjall-wal-tcp] mixed95-read x16    30491 ops        91095 ops/s  p50   114.3us p95   283.0us p99   401.3us max   11.04ms
+[babel-fjall-wal-tcp] mixed95-write x16     1509 ops         4508 ops/s  p50   201.4us p95   374.9us p99   652.2us max    4.81ms
+[babel-fjall-wal-tcp] mixed50    x16    32000 ops        84589 ops/s  p50   148.8us p95   324.4us p99   512.7us max    7.12ms
+[babel-fjall-wal-tcp] mixed50-read x16    15923 ops        42091 ops/s  p50   101.0us p95   304.0us p99   441.8us max    7.12ms
+[babel-fjall-wal-tcp] mixed50-write x16    16077 ops        42498 ops/s  p50   170.1us p95   344.4us p99   605.7us max    6.97ms
+[babel-fjall-wal-tcp] update     x1       300 ops         7175 ops/s  p50   132.5us p95   186.5us p99   283.1us max   308.9us
+[babel-fjall-wal-tcp] update-mt  x1       200 ops         6935 ops/s  p50   130.8us p95   204.2us p99   346.9us max   794.6us
+[babel-fjall-wal-tcp] update-mt  x4       800 ops        27854 ops/s  p50   137.3us p95   196.1us p99   263.3us max   446.6us
+[babel-fjall-wal-tcp] update-mt  x16     3200 ops        61352 ops/s  p50   243.6us p95   352.3us p99   455.3us max    1.72ms
+[babel-fjall-wal-tcp] update-mt  x64    12800 ops        60331 ops/s  p50   944.3us p95    1.55ms p99    2.72ms max    9.48ms
+[babel-fjall-wal-tcp] delete     x1       300 ops        10263 ops/s  p50    94.4us p95   123.9us p99   144.2us max   408.6us
+[babel-fjall-wal-tcp] delete-mt  x1       200 ops        10094 ops/s  p50    97.3us p95   130.2us p99   145.4us max   188.0us
+[babel-fjall-wal-tcp] delete-mt  x4       800 ops        39304 ops/s  p50    97.8us p95   142.3us p99   178.3us max   236.7us
+[babel-fjall-wal-tcp] delete-mt  x16     3200 ops        70113 ops/s  p50   217.8us p95   296.9us p99   368.6us max   784.0us
+[babel-fjall-wal-tcp] delete-mt  x64    12800 ops        71329 ops/s  p50   849.7us p95    1.24ms p99    1.44ms max    1.91ms
+== babel-wal-tcp-raw (100000 records x 512 B, relaxed)
+[babel-wal-tcp-raw] load       100000 records in 1.18s of batches -> 84665 rec/s
+[babel-wal-tcp-raw] load-batch x1       100 ops           85 ops/s  p50    7.31ms p95   19.20ms p99  103.03ms max  143.51ms
+[babel-wal-tcp-raw] space          134.75 MB  (redb file allocated: data files allocated, WAL file excluded (+16.78 MB WAL; engine payload 61.30 MB))
+[babel-wal-tcp-raw] space-compacted      69.62 MB  (data files after Db::compact in 2.36s: min(apparent, allocated), WAL file excluded (+16.78 MB WAL; engine payload 61.30 MB))
+[babel-wal-tcp-raw] put        x1       300 ops         7425 ops/s  p50   123.9us p95   171.0us p99   267.5us max    1.54ms
+[babel-wal-tcp-raw] put-mt     x1       200 ops         8090 ops/s  p50   118.9us p95   163.3us p99   193.8us max   228.2us
+[babel-wal-tcp-raw] put-mt     x4       800 ops        26304 ops/s  p50   144.5us p95   225.0us p99   363.1us max   438.4us
+[babel-wal-tcp-raw] put-mt     x16     3200 ops        47693 ops/s  p50   317.5us p95   462.6us p99   723.5us max   970.3us
+[babel-wal-tcp-raw] put-mt     x64    12800 ops        59124 ops/s  p50   994.7us p95    1.45ms p99    2.33ms max    5.01ms
+[babel-wal-tcp-raw] get        x1     20000 ops        16464 ops/s  p50    55.0us p95    96.2us p99   124.0us max   21.96ms
+[babel-wal-tcp-raw] get-mt     x4     40000 ops        64714 ops/s  p50    56.8us p95    87.0us p99   117.6us max    1.57ms
+[babel-wal-tcp-raw] get-mt     x16   160000 ops       147133 ops/s  p50    69.3us p95   128.7us p99   199.2us max   55.96ms
+[babel-wal-tcp-raw] latest     x1      5000 ops         7420 ops/s  p50   125.5us p95   202.4us p99   281.8us max   767.7us
+[babel-wal-tcp-raw] latest-mt  x4     10000 ops        28536 ops/s  p50   132.1us p95   184.2us p99   241.2us max   614.1us
+[babel-wal-tcp-raw] latest-mt  x16    40000 ops        73111 ops/s  p50   161.0us p95   308.0us p99   487.0us max   16.41ms
+[babel-wal-tcp-raw] range      skipped: the babeldb TCP protocol has no key-range scan (SCAN_PREFIX only)
+[babel-wal-tcp-raw] mixed95    x16    32000 ops        88107 ops/s  p50   125.2us p95   287.8us p99   463.6us max   26.50ms
+[babel-wal-tcp-raw] mixed95-read x16    30491 ops        83952 ops/s  p50   120.6us p95   263.4us p99   408.0us max   26.50ms
+[babel-wal-tcp-raw] mixed95-write x16     1509 ops         4155 ops/s  p50   258.5us p95   470.7us p99   796.8us max    5.04ms
+[babel-wal-tcp-raw] mixed50    x16    32000 ops        56678 ops/s  p50   234.0us p95   500.0us p99   653.9us max   60.01ms
+[babel-wal-tcp-raw] mixed50-read x16    15923 ops        28203 ops/s  p50    77.1us p95   200.2us p99   276.2us max    4.99ms
+[babel-wal-tcp-raw] mixed50-write x16    16077 ops        28475 ops/s  p50   367.1us p95   554.3us p99   860.6us max   60.01ms
+[babel-wal-tcp-raw] update     x1       300 ops         6071 ops/s  p50   162.8us p95   223.9us p99   248.2us max   299.6us
+[babel-wal-tcp-raw] update-mt  x1       200 ops         6012 ops/s  p50   163.3us p95   219.8us p99   277.5us max   356.7us
+[babel-wal-tcp-raw] update-mt  x4       800 ops        19019 ops/s  p50   201.1us p95   310.0us p99   473.5us max   771.7us
+[babel-wal-tcp-raw] update-mt  x16     3200 ops        30268 ops/s  p50   481.3us p95   798.3us p99    1.34ms max    4.28ms
+[babel-wal-tcp-raw] update-mt  x64    12800 ops        25453 ops/s  p50    1.96ms p95    2.96ms p99    4.89ms max   58.62ms
+[babel-wal-tcp-raw] delete     x1       300 ops         6528 ops/s  p50   143.1us p95   197.1us p99   233.4us max    1.53ms
+[babel-wal-tcp-raw] delete-mt  x1       200 ops         6393 ops/s  p50   152.9us p95   203.4us p99   244.0us max   268.8us
+[babel-wal-tcp-raw] delete-mt  x4       800 ops        19056 ops/s  p50   199.7us p95   315.8us p99   381.4us max   607.6us
+[babel-wal-tcp-raw] delete-mt  x16     3200 ops        24869 ops/s  p50   608.1us p95   890.1us p99    1.05ms max    1.93ms
+[babel-wal-tcp-raw] delete-mt  x64    12800 ops        27964 ops/s  p50    2.18ms p95    3.13ms p99    3.82ms max    4.62ms
+== postgres (100000 records x 512 B, relaxed)
+[postgres] load       100000 records in 0.85s of batches -> 117800 rec/s
+[postgres] load-batch x1       100 ops          118 ops/s  p50    8.23ms p95   11.66ms p99   16.33ms max   17.12ms
+[postgres] space           62.62 MB  (pg_total_relation_size(messages): heap + TOAST + primary key index (WAL excluded))
+[postgres] put        x1       300 ops         5534 ops/s  p50   104.3us p95   151.3us p99   270.9us max   20.72ms
+[postgres] put-mt     x1       200 ops         5249 ops/s  p50   108.8us p95   184.0us p99   370.1us max   14.74ms
+[postgres] put-mt     x4       800 ops        31204 ops/s  p50   115.1us p95   194.7us p99   376.8us max    1.05ms
+[postgres] put-mt     x16     3200 ops        58303 ops/s  p50   178.1us p95   371.0us p99    1.74ms max    4.22ms
+[postgres] put-mt     x64    12800 ops        47425 ops/s  p50   172.6us p95   460.4us p99    4.38ms max  171.04ms
+[postgres] get        x1     20000 ops         7646 ops/s  p50   124.6us p95   178.5us p99   280.0us max    3.12ms
+[postgres] get-mt     x4     40000 ops        26551 ops/s  p50   140.1us p95   203.9us p99   315.1us max    3.61ms
+[postgres] get-mt     x16   160000 ops        57869 ops/s  p50   178.7us p95   332.1us p99   555.8us max   86.47ms
+[postgres] latest     x1      5000 ops         2354 ops/s  p50   380.5us p95   725.3us p99    1.34ms max    4.78ms
+[postgres] latest-mt  x4     10000 ops        11226 ops/s  p50   343.5us p95   492.6us p99   664.4us max    1.82ms
+[postgres] latest-mt  x16    40000 ops        23412 ops/s  p50   451.5us p95   873.0us p99    2.18ms max   82.39ms
+[postgres] range      x1   153.4 messages per range on average
+[postgres] range      x1      1250 ops         1465 ops/s  p50   671.1us p95    1.19ms p99    1.55ms max    3.04ms
+[postgres] range-mt   x4   154.5 messages per range on average
+[postgres] range-mt   x4      2500 ops         5353 ops/s  p50   766.9us p95    1.22ms p99    1.70ms max    3.11ms
+[postgres] range-mt   x16  153.4 messages per range on average
+[postgres] range-mt   x16    10000 ops        10983 ops/s  p50   926.6us p95    1.85ms p99   19.01ms max   80.68ms
+[postgres] mixed95    x16    32000 ops        46221 ops/s  p50   201.9us p95   494.1us p99   791.5us max   60.83ms
+[postgres] mixed95-read x16    30491 ops        44041 ops/s  p50   202.7us p95   497.2us p99   796.2us max   60.83ms
+[postgres] mixed95-write x16     1509 ops         2180 ops/s  p50   189.5us p95   389.9us p99   692.9us max    7.86ms
+[postgres] mixed50    x16    32000 ops        48055 ops/s  p50   187.8us p95   495.5us p99   832.5us max   67.86ms
+[postgres] mixed50-read x16    15923 ops        23912 ops/s  p50   202.4us p95   540.7us p99   866.5us max   42.50ms
+[postgres] mixed50-write x16    16077 ops        24143 ops/s  p50   179.4us p95   392.1us p99   754.2us max   67.86ms
+[postgres] update     x1       300 ops         5094 ops/s  p50   168.9us p95   308.6us p99   612.6us max    3.29ms
+[postgres] update-mt  x1       200 ops         5059 ops/s  p50   175.3us p95   279.2us p99   540.9us max    1.88ms
+[postgres] update-mt  x4       800 ops        19106 ops/s  p50   172.5us p95   310.3us p99   785.7us max    2.21ms
+[postgres] update-mt  x16     3200 ops        33855 ops/s  p50   233.7us p95   988.7us p99    5.12ms max    8.45ms
+[postgres] update-mt  x64    12800 ops        33763 ops/s  p50   283.5us p95    6.19ms p99   18.75ms max  102.76ms
+[postgres] delete     x1       300 ops         7112 ops/s  p50   133.9us p95   194.8us p99   241.8us max   770.9us
+[postgres] delete-mt  x1       200 ops         6909 ops/s  p50   131.9us p95   193.8us p99   410.6us max   668.2us
+[postgres] delete-mt  x4       800 ops        25364 ops/s  p50   143.6us p95   215.4us p99   369.5us max   949.2us
+[postgres] delete-mt  x16     3200 ops        56341 ops/s  p50   203.1us p95   393.8us p99   602.9us max    2.56ms
+[postgres] delete-mt  x64    12800 ops        66911 ops/s  p50   270.5us p95   925.9us p99    2.23ms max   63.61ms
+== mongo (100000 records x 512 B, relaxed)
+[mongo] load       100000 records in 1.63s of batches -> 61289 rec/s
+[mongo] load-batch x1       100 ops           61 ops/s  p50   13.46ms p95   30.30ms p99   34.29ms max   54.62ms
+[mongo] space           32.13 MB  (dbStats storageSize 30068736 + indexSize 2064384 (WiredTiger, default snappy block compression; journal excluded))
+[mongo] put        x1       300 ops         3688 ops/s  p50   250.1us p95   393.1us p99   582.8us max   971.4us
+[mongo] put-mt     x1       200 ops         3458 ops/s  p50   278.0us p95   419.8us p99   549.4us max   661.7us
+[mongo] put-mt     x4       800 ops        12297 ops/s  p50   279.4us p95   431.6us p99    1.04ms max    4.60ms
+[mongo] put-mt     x16     3200 ops        12677 ops/s  p50   688.7us p95    2.80ms p99    7.00ms max   30.38ms
+[mongo] put-mt     x64    12800 ops         9983 ops/s  p50    5.30ms p95   10.88ms p99   25.04ms max  108.48ms
+[mongo] get        x1     20000 ops         2995 ops/s  p50   255.3us p95   659.9us p99    1.67ms max   16.87ms
+[mongo] get-mt     x4     40000 ops        13022 ops/s  p50   276.6us p95   434.2us p99   791.8us max   18.65ms
+[mongo] get-mt     x16   160000 ops        19191 ops/s  p50   510.9us p95    2.10ms p99    4.98ms max   87.89ms
+[mongo] latest     x1      5000 ops         1385 ops/s  p50   639.7us p95    1.23ms p99    1.64ms max    5.25ms
+[mongo] latest-mt  x4     10000 ops         5837 ops/s  p50   650.8us p95   963.5us p99    1.30ms max    4.01ms
+[mongo] latest-mt  x16    40000 ops        10662 ops/s  p50    1.03ms p95    3.49ms p99    5.73ms max   61.36ms
+[mongo] range      x1   153.4 messages per range on average
+[mongo] range      x1      1250 ops          545 ops/s  p50    1.73ms p95    3.24ms p99    4.35ms max   14.88ms
+[mongo] range-mt   x4   154.5 messages per range on average
+[mongo] range-mt   x4      2500 ops         2351 ops/s  p50    1.72ms p95    2.68ms p99    3.64ms max    8.91ms
+[mongo] range-mt   x16  153.4 messages per range on average
+[mongo] range-mt   x16    10000 ops         4679 ops/s  p50    2.89ms p95    7.04ms p99   10.21ms max   28.02ms
+[mongo] mixed95    x16    32000 ops        19490 ops/s  p50   563.8us p95    2.15ms p99    3.75ms max   13.50ms
+[mongo] mixed95-read x16    30491 ops        18571 ops/s  p50   569.3us p95    2.16ms p99    3.79ms max   13.50ms
+[mongo] mixed95-write x16     1509 ops          919 ops/s  p50   500.7us p95    1.89ms p99    3.43ms max    6.64ms
+[mongo] mixed50    x16    32000 ops        23278 ops/s  p50   468.4us p95    1.76ms p99    2.90ms max   10.41ms
+[mongo] mixed50-read x16    15923 ops        11583 ops/s  p50   567.5us p95    2.02ms p99    3.21ms max    8.14ms
+[mongo] mixed50-write x16    16077 ops        11695 ops/s  p50   409.0us p95    1.39ms p99    2.39ms max   10.41ms
+[mongo] update     x1       300 ops         3648 ops/s  p50   257.5us p95   373.6us p99   649.4us max   798.9us
+[mongo] update-mt  x1       200 ops         3713 ops/s  p50   256.4us p95   366.1us p99   476.0us max   562.3us
+[mongo] update-mt  x4       800 ops        14152 ops/s  p50   272.2us p95   357.6us p99   432.9us max   542.7us
+[mongo] update-mt  x16     3200 ops        23069 ops/s  p50   468.5us p95    1.55ms p99    2.94ms max    9.80ms
+[mongo] update-mt  x64    12800 ops        22200 ops/s  p50    2.04ms p95    6.63ms p99   15.96ms max   29.79ms
+[mongo] delete     x1       300 ops         4000 ops/s  p50   240.0us p95   344.4us p99   442.7us max   521.0us
+[mongo] delete-mt  x1       200 ops         4018 ops/s  p50   239.2us p95   337.6us p99   424.9us max   460.3us
+[mongo] delete-mt  x4       800 ops        15621 ops/s  p50   248.6us p95   309.4us p99   377.3us max   809.6us
+[mongo] delete-mt  x16     3200 ops        26790 ops/s  p50   417.0us p95    1.35ms p99    1.98ms max    3.74ms
+[mongo] delete-mt  x64    12800 ops        23298 ops/s  p50    2.21ms p95    5.65ms p99    8.63ms max   23.23ms
+
+== summary (ops/s; p99)
+load-batch x1   babel-fjall-wal: 186/s p99 7.74ms | babel-fjall-wal-tcp: 154/s p99 16.69ms | babel-wal-tcp-raw: 85/s p99 103.03ms | postgres: 118/s p99 16.33ms | mongo: 61/s p99 34.29ms
+put        x1   babel-fjall-wal: 18225/s p99 129.9us | babel-fjall-wal-tcp: 8777/s p99 203.0us | babel-wal-tcp-raw: 7425/s p99 267.5us | postgres: 5534/s p99 270.9us | mongo: 3688/s p99 582.8us
+put-mt     x1   babel-fjall-wal: 23314/s p99 82.6us | babel-fjall-wal-tcp: 9047/s p99 166.3us | babel-wal-tcp-raw: 8090/s p99 193.8us | postgres: 5249/s p99 370.1us | mongo: 3458/s p99 549.4us
+put-mt     x4   babel-fjall-wal: 81521/s p99 101.5us | babel-fjall-wal-tcp: 36060/s p99 189.7us | babel-wal-tcp-raw: 26304/s p99 363.1us | postgres: 31204/s p99 376.8us | mongo: 12297/s p99 1.04ms
+put-mt     x16  babel-fjall-wal: 154062/s p99 268.0us | babel-fjall-wal-tcp: 83856/s p99 519.3us | babel-wal-tcp-raw: 47693/s p99 723.5us | postgres: 58303/s p99 1.74ms | mongo: 12677/s p99 7.00ms
+put-mt     x64  babel-fjall-wal: 157295/s p99 976.4us | babel-fjall-wal-tcp: 96794/s p99 2.26ms | babel-wal-tcp-raw: 59124/s p99 2.33ms | postgres: 47425/s p99 4.38ms | mongo: 9983/s p99 25.04ms
+get        x1   babel-fjall-wal: 163603/s p99 18.7us | babel-fjall-wal-tcp: 14457/s p99 159.7us | babel-wal-tcp-raw: 16464/s p99 124.0us | postgres: 7646/s p99 280.0us | mongo: 2995/s p99 1.67ms
+get-mt     x4   babel-fjall-wal: 681132/s p99 12.7us | babel-fjall-wal-tcp: 59020/s p99 112.8us | babel-wal-tcp-raw: 64714/s p99 117.6us | postgres: 26551/s p99 315.1us | mongo: 13022/s p99 791.8us
+get-mt     x16  babel-fjall-wal: 1923639/s p99 23.4us | babel-fjall-wal-tcp: 112750/s p99 260.2us | babel-wal-tcp-raw: 147133/s p99 199.2us | postgres: 57869/s p99 555.8us | mongo: 19191/s p99 4.98ms
+latest     x1   babel-fjall-wal: 13523/s p99 205.4us | babel-fjall-wal-tcp: 5819/s p99 345.6us | babel-wal-tcp-raw: 7420/s p99 281.8us | postgres: 2354/s p99 1.34ms | mongo: 1385/s p99 1.64ms
+latest-mt  x4   babel-fjall-wal: 64463/s p99 149.2us | babel-fjall-wal-tcp: 25949/s p99 291.7us | babel-wal-tcp-raw: 28536/s p99 241.2us | postgres: 11226/s p99 664.4us | mongo: 5837/s p99 1.30ms
+latest-mt  x16  babel-fjall-wal: 160743/s p99 367.1us | babel-fjall-wal-tcp: 56465/s p99 709.6us | babel-wal-tcp-raw: 73111/s p99 487.0us | postgres: 23412/s p99 2.18ms | mongo: 10662/s p99 5.73ms
+range      x1   babel-fjall-wal: 3429/s p99 613.9us | postgres: 1465/s p99 1.55ms | mongo: 545/s p99 4.35ms
+range-mt   x4   babel-fjall-wal: 11674/s p99 823.5us | postgres: 5353/s p99 1.70ms | mongo: 2351/s p99 3.64ms
+range-mt   x16  babel-fjall-wal: 30300/s p99 2.02ms | postgres: 10983/s p99 19.01ms | mongo: 4679/s p99 10.21ms
+mixed95    x16  babel-fjall-wal: 487197/s p99 224.7us | babel-fjall-wal-tcp: 95603/s p99 415.6us | babel-wal-tcp-raw: 88107/s p99 463.6us | postgres: 46221/s p99 791.5us | mongo: 19490/s p99 3.75ms
+mixed95-read x16  babel-fjall-wal: 464223/s p99 125.7us | babel-fjall-wal-tcp: 91095/s p99 401.3us | babel-wal-tcp-raw: 83952/s p99 408.0us | postgres: 44041/s p99 796.2us | mongo: 18571/s p99 3.79ms
+mixed95-write x16  babel-fjall-wal: 22974/s p99 629.0us | babel-fjall-wal-tcp: 4508/s p99 652.2us | babel-wal-tcp-raw: 4155/s p99 796.8us | postgres: 2180/s p99 692.9us | mongo: 919/s p99 3.43ms
+mixed50    x16  babel-fjall-wal: 199341/s p99 261.6us | babel-fjall-wal-tcp: 84589/s p99 512.7us | babel-wal-tcp-raw: 56678/s p99 653.9us | postgres: 48055/s p99 832.5us | mongo: 23278/s p99 2.90ms
+mixed50-read x16  babel-fjall-wal: 99191/s p99 187.7us | babel-fjall-wal-tcp: 42091/s p99 441.8us | babel-wal-tcp-raw: 28203/s p99 276.2us | postgres: 23912/s p99 866.5us | mongo: 11583/s p99 3.21ms
+mixed50-write x16  babel-fjall-wal: 100150/s p99 327.7us | babel-fjall-wal-tcp: 42498/s p99 605.7us | babel-wal-tcp-raw: 28475/s p99 860.6us | postgres: 24143/s p99 754.2us | mongo: 11695/s p99 2.39ms
+update     x1   babel-fjall-wal: 17344/s p99 132.0us | babel-fjall-wal-tcp: 7175/s p99 283.1us | babel-wal-tcp-raw: 6071/s p99 248.2us | postgres: 5094/s p99 612.6us | mongo: 3648/s p99 649.4us
+update-mt  x1   babel-fjall-wal: 16922/s p99 99.8us | babel-fjall-wal-tcp: 6935/s p99 346.9us | babel-wal-tcp-raw: 6012/s p99 277.5us | postgres: 5059/s p99 540.9us | mongo: 3713/s p99 476.0us
+update-mt  x4   babel-fjall-wal: 74836/s p99 119.6us | babel-fjall-wal-tcp: 27854/s p99 263.3us | babel-wal-tcp-raw: 19019/s p99 473.5us | postgres: 19106/s p99 785.7us | mongo: 14152/s p99 432.9us
+update-mt  x16  babel-fjall-wal: 79795/s p99 711.6us | babel-fjall-wal-tcp: 61352/s p99 455.3us | babel-wal-tcp-raw: 30268/s p99 1.34ms | postgres: 33855/s p99 5.12ms | mongo: 23069/s p99 2.94ms
+update-mt  x64  babel-fjall-wal: 78142/s p99 2.28ms | babel-fjall-wal-tcp: 60331/s p99 2.72ms | babel-wal-tcp-raw: 25453/s p99 4.89ms | postgres: 33763/s p99 18.75ms | mongo: 22200/s p99 15.96ms
+delete     x1   babel-fjall-wal: 31183/s p99 59.6us | babel-fjall-wal-tcp: 10263/s p99 144.2us | babel-wal-tcp-raw: 6528/s p99 233.4us | postgres: 7112/s p99 241.8us | mongo: 4000/s p99 442.7us
+delete-mt  x1   babel-fjall-wal: 31115/s p99 79.7us | babel-fjall-wal-tcp: 10094/s p99 145.4us | babel-wal-tcp-raw: 6393/s p99 244.0us | postgres: 6909/s p99 410.6us | mongo: 4018/s p99 424.9us
+delete-mt  x4   babel-fjall-wal: 78068/s p99 114.6us | babel-fjall-wal-tcp: 39304/s p99 178.3us | babel-wal-tcp-raw: 19056/s p99 381.4us | postgres: 25364/s p99 369.5us | mongo: 15621/s p99 377.3us
+delete-mt  x16  babel-fjall-wal: 96814/s p99 290.5us | babel-fjall-wal-tcp: 70113/s p99 368.6us | babel-wal-tcp-raw: 24869/s p99 1.05ms | postgres: 56341/s p99 602.9us | mongo: 26790/s p99 1.98ms
+delete-mt  x64  babel-fjall-wal: 90897/s p99 1.41ms | babel-fjall-wal-tcp: 71329/s p99 1.44ms | babel-wal-tcp-raw: 27964/s p99 3.82ms | postgres: 66911/s p99 2.23ms | mongo: 23298/s p99 8.63ms
+space      babel-fjall-wal: 29.40 MB
+space-compacted babel-fjall-wal: 29.24 MB
+space      babel-fjall-wal-tcp: 29.03 MB
+space-compacted babel-fjall-wal-tcp: 28.87 MB
+space      babel-wal-tcp-raw: 134.75 MB
+space-compacted babel-wal-tcp-raw: 69.62 MB
+space      postgres: 62.62 MB
+space      mongo: 32.13 MB

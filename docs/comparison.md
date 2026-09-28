@@ -168,10 +168,58 @@ na rodada 2). Saída bruta: `bench-results/compare-round3.txt`. Espaço: só arq
 - O placar vale para esta carga (mensagens de chat de 512 B, chave → valor, "últimas N"). O
   PostgreSQL e o MongoDB seguem tendo SQL/consultas, índices secundários e replicação.
 
-## Rodada 4 (planejada)
+## Rodada 4 (28/09/2026)
 
-1. Escrita concorrente via TCP com 16–64 clientes (gargalos medidos: custo por waiter
-   notificado, clientes alternando em dois grupos, preempção da thread de commit).
-2. Amplitude: atualizações, exclusões, varreduras por intervalo, misturas 95/5 e 50/50,
-   valores grandes (4 KiB–1 MiB), modo relaxado e dados maiores que a RAM — para saber onde
-   mais o babeldb perde.
+Mudanças integradas: o sink de commit do servidor TCP passa a pré-codificar os valores nas
+threads das conexões (falha de integração da rodada 3: tudo era codificado na thread única de
+commit); notificação dos clientes em árvore (a thread de commit acorda 2 waiters, cada um acorda
+mais 2); requisições grandes (≥ 64 ops ou ≥ 1 MiB) seguem o caminho antigo para não perder
+carga em lote. Harness com fases opcionais: `update`, `delete`, `range`, `mixed95`, `mixed50`,
+`--scenario` (s3 texto, s5 incompressível), valores de até 1 MiB. Sistemas:
+`babel-fjall-wal-tcp` (a comparação justa), `babel-fjall-wal` (embarcado; o único que roda
+`range`, porque o protocolo TCP ainda não tem varredura por intervalo de chaves),
+`babel-wal-tcp-raw`, PostgreSQL 17, MongoDB 8.3. 1 repetição por execução; saídas brutas em
+`bench-results/compare-r4-*.txt`.
+
+### Placar por carga (babeldb via TCP vs o melhor entre PostgreSQL e MongoDB)
+
+| carga | fases vencidas | onde perde ou empata |
+|---|---|---|
+| chat 100 k × 512 B, durável | **26 de 31** | carga em lote 119 k vs 120 k/s e delete 1 cliente 4 270 vs 4 333/s (empates no ruído); `range` sem suporte TCP |
+| chat 100 k × 512 B, relaxado | **28 de 31** | só `range` (sem suporte TCP) |
+| 50 k × 4 KiB (texto) | 23 de 31 | update/delete concorrentes (0,68–0,97 do PG) |
+| 10 k × 64 KiB (incompressível) | 17 de 31 | `latest` (0,63–0,82 do PG), update/delete concorrentes (até 0,35 do Mongo), put com 4 clientes |
+| 2 k × 1 MiB (texto) | 12 de 25 | put, get, update e delete (0,22–0,92) |
+| 2 k × 1 MiB (incompressível) | 2 de 25 | quase tudo; delete concorrente até 0,05 do Mongo |
+
+### Destaques da carga de chat (ops/s, durável, localhost TCP)
+
+| operação | babeldb fjall+WAL | PostgreSQL | MongoDB |
+|---|---|---|---|
+| put durável, 16 / 64 clientes | **44 770 / 72 462** | 30 379 / 31 445 | 6 470 / 17 140 |
+| update, 16 / 64 clientes | **33 719 / 44 220** | 16 693 / 19 574 | 6 396 / 15 061 |
+| delete, 16 / 64 clientes | **36 957 / 51 842** | 34 111 / 32 467 | 6 475 / 17 151 |
+| get, 16 clientes | **128 339** | 66 555 | 24 148 |
+| últimas 50, 16 clientes | **60 929** | 23 331 | 10 877 |
+| mistura 95/5, 16 clientes | **74 754** | 44 419 | 18 953 |
+| mistura 50/50, 16 clientes | **55 344** | 39 284 | 10 049 |
+| intervalo de 200 msgs, 16 threads (babeldb embarcado) | 28 755 | 12 232 | 4 777 |
+| espaço dos dados | **28,5 MB** | 62,6 MB | 32,1 MB |
+
+### Diagnóstico dos valores grandes
+
+1. `delete`/`update` liberam os objetos do valor antigo lendo o envelope inteiro de cada bloco
+   só para achar o digest do índice de dedupe (1 MiB lido para apagar 1 MiB).
+2. Valores grandes são escritos no WAL, no journal do fjall e nas SSTables; a transferência TCP
+   de valores grandes fica em ~330 MB/s (medido na rodada 4).
+3. O protocolo TCP não tem varredura por intervalo de chaves (só prefixo + últimas N).
+4. Espaço de valores incompressíveis grandes no redb: ~2× (blocos de 16 KiB + cabeçalho não cabem
+   numa página de 16 KiB); no fjall compactado empata com PG/Mongo, mas antes de compactar fica
+   acima.
+
+## Rodada 5 (planejada)
+
+1. Caminho de valores grandes: liberar objetos sem ler o corpo; limiar inline maior; separação
+   chave/valor do fjall para valores grandes; evitar escritas duplicadas de valores grandes.
+2. Protocolo TCP: operação de varredura por intervalo; transferência de valores grandes mais
+   rápida (buffers de socket, menos cópias, respostas em streaming).
