@@ -65,8 +65,9 @@ pub(crate) const MANIFEST_REVISION: Range<usize> = 1..9;
 /// revision 0, ready to be published once `set_manifest_revision` wrote the
 /// revision allocated inside the write transaction. The bytes are those of
 /// `Manifest { body: ManifestBody::Inline(envelope), .. }.encode()`, built in
-/// one allocation and outside the transaction.
-pub(crate) fn prepare_inline_manifest(planner: &Planner, data: &[u8]) -> Vec<u8> {
+/// one allocation and outside the transaction. Also returns the id of the
+/// param its envelope needs to be decoded (None when its codec needs none).
+pub(crate) fn prepare_inline(planner: &Planner, data: &[u8]) -> (Vec<u8>, Option<u64>) {
     assert!(data.len() <= format::MAX_UNIT_LEN as usize, "unit larger than MAX_UNIT_LEN");
     let digest = hash::digest(data);
     let raw_len = data.len() as u32;
@@ -80,8 +81,19 @@ pub(crate) fn prepare_inline_manifest(planner: &Planner, data: &[u8]) -> Vec<u8>
         m.push(0); // flags: no source
         format::put_varint(&mut m, envelope_len as u64);
         append_envelope(&mut m, codec, aux_id, raw_len, &digest, body);
-        m
+        (m, codec::required_param(codec, aux_id).map(|_| aux_id))
     })
+}
+
+/// The id of the param an encoded envelope needs to be decoded, if any.
+pub(crate) fn envelope_param(envelope: &[u8]) -> Result<Option<u64>> {
+    let (h, _) = format::read_envelope(envelope)?;
+    Ok(codec::required_param(h.codec, h.aux_id).map(|_| h.aux_id))
+}
+
+#[cfg(test)]
+pub(crate) fn prepare_inline_manifest(planner: &Planner, data: &[u8]) -> Vec<u8> {
+    prepare_inline(planner, data).0
 }
 
 /// Write `revision` into an encoded manifest.
@@ -447,6 +459,7 @@ mod tests {
                 let mut prepared = prepare_inline_manifest(&planner, &data);
                 set_manifest_revision(&mut prepared, revision);
                 let envelope = prepare_unit(&planner, &data).envelope;
+                assert_eq!(prepare_inline(&planner, &data).1, envelope_param(&envelope).unwrap());
                 let expected = Manifest { revision, logical_len: data.len() as u64, source_id: None, body: ManifestBody::Inline(envelope) }.encode();
                 assert_eq!(prepared, expected);
                 let m = Manifest::decode(&prepared).unwrap();
@@ -473,6 +486,9 @@ mod tests {
         // A template envelope without its param, or with a param of the wrong kind.
         let tpl = format::write_envelope(CodecTag::TEMPLATE_PATCH_V1, 77, 1, &hash::digest(b"a"), &[2, b'a']);
         let (th, tbody) = format::read_envelope(&tpl).unwrap();
+        assert_eq!(envelope_param(&tpl).unwrap(), Some(77));
+        assert_eq!(envelope_param(&env).unwrap(), None);
+        assert!(envelope_param(&tpl[..10]).is_err());
         assert!(matches!(decode_body_into(&th, tbody, None, true, None, &mut out), Err(Error::MissingDependency { param_id: 77 })));
         let dict = ParamEntry::Dict(Arc::new(ZstdDict::new(77, vec![1; 300], 3).unwrap()));
         assert!(matches!(decode_body_into(&th, tbody, Some(&dict), true, None, &mut out), Err(Error::Integrity { .. })));

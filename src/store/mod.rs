@@ -104,6 +104,14 @@ pub trait ReadTxn {
 
     /// Number of entries in a table.
     fn len(&self, table: Table) -> Result<u64>;
+
+    /// `get` of each key of `keys`, in order: exactly one `get` per key.
+    ///
+    /// Backends override it to amortize per-call costs over a batch (redb opens the table
+    /// once per call instead of once per key).
+    fn get_many(&self, table: Table, keys: &[&[u8]]) -> Result<Vec<Option<Vec<u8>>>> {
+        keys.iter().map(|key| self.get(table, key)).collect()
+    }
 }
 
 /// One `(key, value)` pair of [`WriteTxn::put_many`].

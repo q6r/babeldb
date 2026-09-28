@@ -8,7 +8,9 @@
 //! check the expectation, store or reuse objects (byte-verified dedupe), take
 //! the new references, retire the replaced manifest (history or release),
 //! publish the manifest and commit. Many ops can share one commit
-//! (`write_batch`, `write_batch_each`).
+//! (`write_batch`, `write_batch_each`). The encoding can also happen earlier,
+//! in another thread (`prepare` / `prepare_batch`, then `write_prepared_each`:
+//! what the group committer does in the threads that submit writes).
 //!
 //! The public signatures are the contract used by the CLI, benches and tests.
 //! Maintenance/training methods live in `crate::maintenance`, imports in
@@ -20,6 +22,7 @@ pub mod ops;
 mod read;
 mod write;
 
+use std::borrow::Cow;
 use std::ops::Bound;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
@@ -37,6 +40,7 @@ use crate::store::{Durability, Store, Table, WriteTxn};
 
 pub use autodict::AutoDictStatus;
 pub use read::VALUE_CACHE_SCAN_LIMIT;
+pub use write::PreparedOp;
 
 use autodict::AutoDict;
 use ops::{ParamCache, ParamEntry};
@@ -177,6 +181,9 @@ pub struct Db<S: Store = RedbStore> {
     pub(crate) counters: EngineCounters,
     /// Automatic Zstd dictionary for small values (`config::AutoDictionary`).
     pub(crate) auto_dict: AutoDict,
+    /// Process-unique id of this handle (`PreparedOp`s are applied only by
+    /// the handle that prepared them).
+    pub(crate) id: u64,
 }
 
 impl Db<RedbStore> {
@@ -291,6 +298,7 @@ impl<S: Store> Db<S> {
 
         Ok(Db {
             cache: BlockCache::new(cfg.cache_bytes),
+            id: write::new_db_id(),
             generators: Registry::builtin(),
             counters: EngineCounters::default(),
             auto_dict,
@@ -438,6 +446,61 @@ impl<S: Store> Db<S> {
     /// anything.
     pub fn write_batch_each(&self, ops: &[BatchOp<'_>], durability: Durability) -> Result<Vec<Result<Option<Revision>>>> {
         write::write_batch_each(self, ops, durability)
+    }
+
+    /// Validate and encode one op now, outside any write transaction, for a
+    /// later [`Db::write_prepared_each`] on this handle (typically in another
+    /// thread than the one that commits). See [`Db::prepare_batch`].
+    pub fn prepare(&self, op: &BatchOp<'_>) -> PreparedOp {
+        let mut prepared = self.prepare_batch(std::slice::from_ref(op));
+        prepared.pop().unwrap_or_else(|| unreachable!("one prepared op per op"))
+    }
+
+    /// Validate and encode ops now (one per op, in order; spread over threads
+    /// when the values are expensive to encode), outside any write
+    /// transaction. Values are encoded with the current planner: if a
+    /// dictionary or template is installed before they are written, they keep
+    /// the representation they were prepared with (still exact and readable:
+    /// params are immutable). Keys are copied, as are values larger than
+    /// `inline_max` (dedupe compares them byte for byte when they are
+    /// written); smaller values are only kept encoded. An invalid op is not
+    /// an error here: it is reported in its slot when written.
+    pub fn prepare_batch(&self, ops: &[BatchOp<'_>]) -> Vec<PreparedOp> {
+        let sources = ops
+            .iter()
+            .map(|op| match *op {
+                BatchOp::Put { key, value, expect } => write::Source {
+                    key: Cow::Borrowed(key),
+                    value: Some(Cow::Borrowed(value)),
+                    expect,
+                },
+                BatchOp::Delete { key, expect } => write::Source { key: Cow::Borrowed(key), value: None, expect },
+            })
+            .collect();
+        write::prepare_ops(self, sources)
+    }
+
+    /// `prepare_batch` of owned ops `(key, value or None for a delete,
+    /// expect)`: nothing is copied (the group committer's path).
+    pub(crate) fn prepare_owned(&self, ops: impl IntoIterator<Item = (Vec<u8>, Option<Vec<u8>>, Expect)>) -> Vec<PreparedOp> {
+        let sources = ops
+            .into_iter()
+            .map(|(key, value, expect)| write::Source { key: Cow::Owned(key), value: value.map(Cow::Owned), expect })
+            .collect();
+        write::prepare_ops(self, sources)
+    }
+
+    /// [`Db::write_batch_each`] of prepared ops: the same contract (in order,
+    /// ONE commit with `durability`, one result per op, failed expectations
+    /// and invalid ops skipped and reported in their slot, outer `Err` only
+    /// for failures that abort the transaction, no commit when nothing
+    /// changes), without encoding anything: expectations are checked and
+    /// dedupe candidates compared byte for byte inside the transaction. An op
+    /// prepared by another handle fails with `InvalidArgument`; one whose
+    /// dictionary or template was removed by [`Db::gc`] since it was
+    /// prepared fails with `MissingDependency` (prepare it again).
+    pub fn write_prepared_each(&self, ops: Vec<PreparedOp>, durability: Durability) -> Result<Vec<Result<Option<Revision>>>> {
+        write::write_prepared_each(self, ops, durability)
     }
 
     /// Make every previously committed `Durability::Deferred` transaction

@@ -7,7 +7,9 @@
 //!   [`BatchSink`]; callers enqueue operations in a bounded queue and wait on a
 //!   completion. The writer turns everything that queued up while the previous
 //!   commit was running into ONE commit, so N concurrent writers pay one fsync
-//!   instead of N.
+//!   instead of N. Sinks that can ([`BatchSink::prepare`]; [`Db`] does) encode
+//!   each request in the thread that submits it, so the single writer thread
+//!   only runs transactions.
 //! - [`ShardedDb`] (`sharded`): N independent databases behind a stable
 //!   [`Router`], each with its own committer: N commits (and fsyncs) in flight
 //!   at once. Atomicity is per shard only.
@@ -40,21 +42,26 @@
 //! No code path in this module holds two locks at once: the committer's queue
 //! lock, a completion's slot lock, a single-flight stripe lock, a flight's
 //! result lock and a cache stripe lock are each taken and released on their
-//! own, and none is held while calling a sink, a read source or a user
-//! callback. (The only nesting is `GroupCommitter::shutdown`, which holds the
-//! join-handle mutex while joining; the writer thread never takes it.) The
-//! blocking waits are on condition variables whose mutex is released while
-//! waiting. Callbacks passed to [`SingleFlight::run`] must not start a read of
-//! the same key (reported as an error, never a deadlock), and sinks must not
-//! call back into their own [`GroupCommitter`].
+//! own, and none is held while calling a read source or a user callback.
+//! The nestings: `GroupCommitter::shutdown` holds the join-handle mutex while
+//! joining (the writer thread never takes it), and a submitting thread holds
+//! the committer's sink lock for reading while [`BatchSink::prepare`] runs
+//! (only `shutdown` takes it for writing, after closing the queue, holding
+//! nothing else; the writer thread never takes it). The blocking waits are
+//! on condition variables whose mutex is released while waiting. Callbacks
+//! passed to [`SingleFlight::run`] must not start a read of the same key
+//! (reported as an error, never a deadlock), and sinks must not call back
+//! into their own [`GroupCommitter`].
 //!
 //! # Backpressure
 //!
 //! The committer queue is bounded by operation count and by key + value
 //! bytes; `submit` blocks while it is full, `try_submit` hands the operations
 //! back. A single request larger than the bounds is admitted only when the
-//! queue is empty. Memory in flight is therefore bounded by the queue limits
-//! plus one batch (`max_batch_ops` / `max_batch_bytes`).
+//! queue is empty. Room is reserved before a request is prepared, so the
+//! prepared form never exceeds the bounds either. Memory in flight is
+//! therefore bounded by the queue limits plus one batch (`max_batch_ops` /
+//! `max_batch_bytes`).
 
 pub mod chat;
 pub mod coalesce;
@@ -65,6 +72,7 @@ use std::any::Any;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+pub use crate::engine::PreparedOp;
 use crate::engine::{BatchOp, Db, Expect, Revision, ScanItem, ScanOptions};
 use crate::error::{Error, Result};
 use crate::store::{Durability, Store};
@@ -170,6 +178,29 @@ impl OwnedOp {
     }
 }
 
+/// The operations of one request on their way to a [`BatchSink`].
+#[derive(Debug)]
+pub enum SinkOps {
+    /// As submitted; applied with [`BatchSink::apply`].
+    Owned(Vec<OwnedOp>),
+    /// Encoded by [`BatchSink::prepare`]; applied with
+    /// [`BatchSink::apply_prepared`] of the same sink.
+    Prepared(Vec<PreparedOp>),
+}
+
+impl SinkOps {
+    pub fn len(&self) -> usize {
+        match self {
+            SinkOps::Owned(ops) => ops.len(),
+            SinkOps::Prepared(ops) => ops.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 /// Write side of a database, as seen by a [`GroupCommitter`].
 pub trait BatchSink: Send + Sync {
     /// Apply, in order and in ONE commit with `durability`, every operation
@@ -180,6 +211,30 @@ pub trait BatchSink: Send + Sync {
 
     /// Make every earlier `Durability::Deferred` commit durable.
     fn sync(&self) -> Result<()>;
+
+    /// Called by [`GroupCommitter`] in the thread that submits a request,
+    /// before queueing it: do the work that needs no transaction (validation,
+    /// encoding) there, so the single writer thread only runs transactions.
+    /// Must return one prepared operation per operation, in order. The
+    /// default hands the operations back unchanged ([`SinkOps::Owned`]): they
+    /// reach [`BatchSink::apply`].
+    fn prepare(&self, ops: Vec<OwnedOp>) -> SinkOps {
+        SinkOps::Owned(ops)
+    }
+
+    /// [`BatchSink::apply`] for operations produced by this sink's
+    /// [`BatchSink::prepare`] (same contract). The default refuses them.
+    fn apply_prepared(
+        &self,
+        ops: Vec<PreparedOp>,
+        durability: Durability,
+    ) -> Result<Vec<OpResult>> {
+        let _ = durability;
+        Err(Error::Unsupported(format!(
+            "this sink does not prepare operations ({} prepared operations refused)",
+            ops.len()
+        )))
+    }
 }
 
 /// Read side of a database, as seen by the coalescing layer.
@@ -196,6 +251,18 @@ impl<T: BatchSink + ?Sized> BatchSink for Arc<T> {
     fn sync(&self) -> Result<()> {
         (**self).sync()
     }
+
+    fn prepare(&self, ops: Vec<OwnedOp>) -> SinkOps {
+        (**self).prepare(ops)
+    }
+
+    fn apply_prepared(
+        &self,
+        ops: Vec<PreparedOp>,
+        durability: Durability,
+    ) -> Result<Vec<OpResult>> {
+        (**self).apply_prepared(ops, durability)
+    }
 }
 
 impl<T: ReadSource + ?Sized> ReadSource for Arc<T> {
@@ -208,6 +275,8 @@ impl<T: ReadSource + ?Sized> ReadSource for Arc<T> {
     }
 }
 
+/// A database prepares requests ([`Db::prepare_batch`] without copies) in
+/// the submitting thread and applies them with [`Db::write_prepared_each`].
 impl<S: Store> BatchSink for Db<S> {
     fn apply(&self, ops: &[OwnedOp], durability: Durability) -> Result<Vec<OpResult>> {
         let batch: Vec<BatchOp<'_>> = ops.iter().map(OwnedOp::as_batch_op).collect();
@@ -216,6 +285,21 @@ impl<S: Store> BatchSink for Db<S> {
 
     fn sync(&self) -> Result<()> {
         Db::sync(self)
+    }
+
+    fn prepare(&self, ops: Vec<OwnedOp>) -> SinkOps {
+        SinkOps::Prepared(self.prepare_owned(ops.into_iter().map(|op| match op {
+            OwnedOp::Put { key, value, expect } => (key, Some(value), expect),
+            OwnedOp::Delete { key, expect } => (key, None, expect),
+        })))
+    }
+
+    fn apply_prepared(
+        &self,
+        ops: Vec<PreparedOp>,
+        durability: Durability,
+    ) -> Result<Vec<OpResult>> {
+        Db::write_prepared_each(self, ops, durability)
     }
 }
 

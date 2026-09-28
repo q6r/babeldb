@@ -177,7 +177,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use super::{Durability, ReadTxn, ScanFn, Store, Table, WriteTxn};
+use super::{Durability, KeyValue, ReadTxn, ScanFn, Store, Table, WriteTxn};
 use crate::config::{WalConfig, WalSync};
 use crate::error::{Error, Result};
 
@@ -1369,35 +1369,41 @@ pub struct WalWrite<'a, S: Store + 'a> {
     oversized: bool,
 }
 
+/// Append one op to the redo record that starts at `start` in `out`, or mark
+/// the record `oversized` (and drop it) when it would outgrow `limit`.
+#[allow(clippy::too_many_arguments)]
+fn log_op(out: &mut Vec<u8>, start: usize, oversized: &mut bool, limit: usize, op: u8, table: Table, key: &[u8], value: &[u8]) {
+    if *oversized {
+        return;
+    }
+    let head = if op == OP_PUT { PUT_HEADER } else { REMOVE_HEADER };
+    let size = out.len() - start;
+    let fits = key.len() <= u32::MAX as usize
+        && value.len() <= u32::MAX as usize
+        && size
+            .saturating_add(head)
+            .saturating_add(key.len())
+            .saturating_add(value.len())
+            <= limit;
+    if !fits {
+        *oversized = true;
+        out.truncate(start);
+        return;
+    }
+    out.push(op);
+    out.push(table.index() as u8);
+    out.extend_from_slice(&(key.len() as u32).to_le_bytes());
+    if op == OP_PUT {
+        out.extend_from_slice(&(value.len() as u32).to_le_bytes());
+    }
+    out.extend_from_slice(key);
+    out.extend_from_slice(value);
+}
+
 impl<'a, S: Store + 'a> WalWrite<'a, S> {
     fn log(&mut self, op: u8, table: Table, key: &[u8], value: &[u8]) {
-        if self.oversized {
-            return;
-        }
-        let head = if op == OP_PUT { PUT_HEADER } else { REMOVE_HEADER };
-        let size = self.st.out.len() - self.start;
-        let fits = key.len() <= u32::MAX as usize
-            && value.len() <= u32::MAX as usize
-            && size
-                .saturating_add(head)
-                .saturating_add(key.len())
-                .saturating_add(value.len())
-                <= self.shared.cfg.record_limit();
-        if !fits {
-            self.oversized = true;
-            let start = self.start;
-            self.st.out.truncate(start);
-            return;
-        }
-        let out = &mut self.st.out;
-        out.push(op);
-        out.push(table.index() as u8);
-        out.extend_from_slice(&(key.len() as u32).to_le_bytes());
-        if op == OP_PUT {
-            out.extend_from_slice(&(value.len() as u32).to_le_bytes());
-        }
-        out.extend_from_slice(key);
-        out.extend_from_slice(value);
+        let limit = self.shared.cfg.record_limit();
+        log_op(&mut self.st.out, self.start, &mut self.oversized, limit, op, table, key, value);
     }
 
     /// `WalStore::checkpoint`, or with `closing` the checkpoint of a clean
@@ -1444,6 +1450,14 @@ impl<'a, S: Store + 'a> ReadTxn for WalWrite<'a, S> {
     fn len(&self, table: Table) -> Result<u64> {
         visible_len(&self.inner, table)
     }
+
+    /// The inner store's `get_many` (reserved `meta` keys stay hidden).
+    fn get_many(&self, table: Table, keys: &[&[u8]]) -> Result<Vec<Option<Vec<u8>>>> {
+        if table == Table::Meta {
+            return keys.iter().map(|key| visible_get(&self.inner, table, key)).collect();
+        }
+        self.inner.get_many(table, keys)
+    }
 }
 
 impl<'a, S: Store + 'a> WriteTxn for WalWrite<'a, S> {
@@ -1455,6 +1469,35 @@ impl<'a, S: Store + 'a> WriteTxn for WalWrite<'a, S> {
         self.ops += 1;
         self.log(OP_PUT, table, key, value);
         Ok(())
+    }
+
+    /// One `put_many` of the inner store (redb opens the table once for the
+    /// batch), each entry logged as `put` logs it.
+    fn put_many(&mut self, table: Table, entries: &mut dyn Iterator<Item = KeyValue<'_>>) -> Result<()> {
+        if table == Table::Meta {
+            // Reserved keys are refused entry by entry.
+            for (key, value) in entries {
+                self.put(table, key, value)?;
+            }
+            return Ok(());
+        }
+        let limit = self.shared.cfg.record_limit();
+        let WalWrite {
+            inner,
+            st,
+            start,
+            ops,
+            oversized,
+            ..
+        } = self;
+        let start = *start;
+        // Logged as the inner store takes them; on `Err` the transaction is
+        // dropped and `begin_write` discards its partial record.
+        let mut logged = entries.inspect(|&(key, value)| {
+            *ops += 1;
+            log_op(&mut st.out, start, oversized, limit, OP_PUT, table, key, value);
+        });
+        inner.put_many(table, &mut logged)
     }
 
     /// A remove that found nothing changed nothing, so the redo record does
