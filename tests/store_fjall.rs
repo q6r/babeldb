@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use babeldb::Error;
-use babeldb::store::fjall::{FjallLayout, FjallStore};
+use babeldb::store::fjall::{DeferredPersist, FjallKvSeparation, FjallLayout, FjallOptions, FjallStore};
 use babeldb::store::{Durability, ReadTxn, Store, Table, WriteTxn};
 
 const LAYOUTS: [FjallLayout; 2] = [FjallLayout::SingleKeyspace, FjallLayout::KeyspacePerTable];
@@ -765,6 +765,219 @@ fn conformance_suite() {
         })
         .expect("conformance");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Key-value separation (blob files)
+// ---------------------------------------------------------------------------
+
+/// Key-value separation from `threshold` bytes with 1 MiB memtables and 256 KiB blob files, so
+/// that a few MiB of values go through flushes, blob file rotation and blob garbage collection.
+fn kv_options(layout: FjallLayout, threshold: u32) -> FjallOptions {
+    FjallOptions {
+        layout,
+        memtable_bytes: 1 << 20,
+        kv_separation: Some(FjallKvSeparation {
+            threshold_bytes: threshold,
+            blob_file_bytes: 256 << 10,
+            ..FjallKvSeparation::default()
+        }),
+        ..FjallOptions::default()
+    }
+}
+
+fn open_kv(dir: &Path, opts: &FjallOptions) -> FjallStore {
+    FjallStore::open_with(dir, CACHE, opts).expect("open kv-separated fjall store")
+}
+
+fn blob_files(s: &FjallStore) -> Vec<PathBuf> {
+    s.files().into_iter().filter(|p| p.parent().is_some_and(|d| d.ends_with("blobs"))).collect()
+}
+
+/// Checks every value of `expected` (key, `Some(value)` or `None` when absent) and the length.
+fn check_objects(s: &FjallStore, expected: &[(u32, Option<Vec<u8>>)], what: &str) {
+    let r = s.begin_read().unwrap();
+    for (i, v) in expected {
+        let got = value_of(&r, Table::Objects, &i.to_be_bytes());
+        assert!(got == *v, "{what}: key {i}: got {:?} bytes, expected {:?}", got.map(|g| g.len()), v.as_ref().map(Vec::len));
+    }
+    let live = expected.iter().filter(|(_, v)| v.is_some()).count() as u64;
+    assert_eq!(r.len(Table::Objects).unwrap(), live, "{what}");
+}
+
+#[test]
+fn kv_separation_conformance_suite() {
+    for layout in LAYOUTS {
+        let mut dirs = Vec::new();
+        babeldb::store::conformance::run_all(&mut || {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let store = open_kv(dir.path(), &kv_options(layout, 64));
+            dirs.push(dir);
+            store
+        })
+        .expect("conformance");
+    }
+}
+
+#[test]
+fn kv_separation_rejects_invalid_options() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = FjallKvSeparation::default();
+    for kv in [
+        FjallKvSeparation { threshold_bytes: 0, ..base },
+        FjallKvSeparation { blob_file_bytes: 1 << 10, ..base },
+        FjallKvSeparation { staleness_percent: 0, ..base },
+        FjallKvSeparation { age_cutoff_percent: 101, ..base },
+    ] {
+        let opts = FjallOptions { kv_separation: Some(kv), ..FjallOptions::default() };
+        assert!(matches!(FjallStore::open_with(dir.path(), CACHE, &opts), Err(Error::InvalidArgument(_))), "{kv:?}");
+    }
+}
+
+/// Large values go to blob files at a flush, survive reopening (the separation is a property of
+/// the directory), and `compact` leaves only live blobs: garbage above the staleness threshold
+/// (a third of the values overwritten, a third deleted), then garbage below it (5 %).
+#[test]
+fn kv_separated_values_survive_reopen_and_compact_reclaims_their_garbage() {
+    const N: u32 = 300;
+    const LEN: usize = 16 << 10;
+    for layout in LAYOUTS {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = kv_options(layout, 1024);
+        let value = |i: u32, round: u64| pseudo_random(LEN, u64::from(i) * 8 + round);
+        let mut expected: Vec<(u32, Option<Vec<u8>>)> = (0..N).map(|i| (i, Some(value(i, 0)))).collect();
+        {
+            let s = open_kv(dir.path(), &opts);
+            assert!(s.kv_separated(), "{layout:?}");
+            for chunk in expected.chunks(50) {
+                let mut w = s.begin_write().unwrap();
+                for (i, v) in chunk {
+                    w.put(Table::Objects, &i.to_be_bytes(), v.as_ref().unwrap()).unwrap();
+                }
+                // Small values stay in the tables.
+                w.put(Table::Records, &chunk[0].0.to_be_bytes(), b"small").unwrap();
+                w.commit(Durability::Immediate).unwrap();
+            }
+            s.flush_memtables().unwrap();
+            assert!(s.blob_file_count() > 1, "{layout:?}: {} blob files", s.blob_file_count());
+            assert_eq!(s.blob_file_count(), blob_files(&s).len(), "{layout:?}");
+            check_objects(&s, &expected, "after the flush");
+        }
+        // Reopened with default options: the directory keeps its separation.
+        let mut s = FjallStore::open_with(dir.path(), CACHE, &FjallOptions { layout, ..FjallOptions::default() }).unwrap();
+        assert!(s.kv_separated(), "{layout:?}");
+        check_objects(&s, &expected, "after reopening");
+        assert_eq!(value_of(&s.begin_read().unwrap(), Table::Records, &0u32.to_be_bytes()).as_deref(), Some(&b"small"[..]));
+
+        let mut w = s.begin_write().unwrap();
+        for (i, v) in expected.iter_mut() {
+            match *i % 3 {
+                0 => {
+                    let new = value(*i, 1);
+                    w.put(Table::Objects, &i.to_be_bytes(), &new).unwrap();
+                    *v = Some(new);
+                }
+                1 => {
+                    assert!(w.remove(Table::Objects, &i.to_be_bytes()).unwrap());
+                    *v = None;
+                }
+                _ => {}
+            }
+        }
+        w.commit(Durability::Immediate).unwrap();
+        assert!(s.compact().unwrap());
+        check_objects(&s, &expected, "after compact");
+        let live = expected.iter().filter(|(_, v)| v.is_some()).count() as u64 * LEN as u64;
+        let bytes = apparent_bytes(&blob_files(&s));
+        eprintln!("{layout:?}: {bytes} bytes of blob files for {live} live bytes");
+        assert_eq!(s.stale_blob_bytes(), 0, "{layout:?}");
+        assert!(bytes >= live && bytes < live + live / 20, "{layout:?}: {bytes} bytes of blob files, {live} live");
+
+        // 5 % garbage: below the staleness threshold, still reclaimed by compact.
+        let mut w = s.begin_write().unwrap();
+        for (i, v) in expected.iter_mut().filter(|(i, v)| v.is_some() && i % 20 == 2) {
+            assert!(w.remove(Table::Objects, &i.to_be_bytes()).unwrap());
+            *v = None;
+        }
+        w.commit(Durability::Immediate).unwrap();
+        assert!(s.compact().unwrap());
+        let live = expected.iter().filter(|(_, v)| v.is_some()).count() as u64 * LEN as u64;
+        let bytes = apparent_bytes(&blob_files(&s));
+        assert_eq!(s.stale_blob_bytes(), 0, "{layout:?}");
+        assert!(bytes >= live && bytes < live + live / 20, "{layout:?}: {bytes} bytes of blob files, {live} live");
+        check_objects(&s, &expected, "after the second compact");
+        drop(s);
+        let s = open_kv(dir.path(), &opts);
+        check_objects(&s, &expected, "after compact and reopen");
+    }
+}
+
+const KV_CRASH_ENV: &str = "BABELDB_FJALL_KV_CRASH_CHILD";
+
+fn kv_crash_value(i: u32) -> Vec<u8> {
+    pseudo_random(20_000 + i as usize, u64::from(i) + 77)
+}
+
+/// Child half of `kv_separated_abrupt_exit_recovery`; does nothing unless spawned by it.
+#[test]
+#[ignore = "helper process of kv_separated_abrupt_exit_recovery"]
+fn kv_separated_abrupt_exit_child() {
+    let Ok(dir) = std::env::var(KV_CRASH_ENV) else {
+        return;
+    };
+    let opts = FjallOptions { deferred: DeferredPersist::WriteToOs, ..kv_options(FjallLayout::SingleKeyspace, 1024) };
+    let s = open_kv(Path::new(&dir), &opts);
+    // In blob files: flushed, then overwritten or deleted in part.
+    for i in 0..100u32 {
+        put_all(&s, Table::Objects, &[(&i.to_be_bytes(), &kv_crash_value(i))], Durability::Immediate);
+    }
+    s.flush_memtables().unwrap();
+    assert!(s.blob_file_count() > 0);
+    let mut w = s.begin_write().unwrap();
+    for i in (0..100u32).step_by(4) {
+        assert!(w.remove(Table::Objects, &i.to_be_bytes()).unwrap());
+    }
+    w.put(Table::Objects, &1u32.to_be_bytes(), &kv_crash_value(1001)).unwrap();
+    w.commit(Durability::Immediate).unwrap();
+    // In the journal only: Deferred, handed to the OS.
+    for i in 100..140u32 {
+        put_all(&s, Table::Objects, &[(&i.to_be_bytes(), &kv_crash_value(i))], Durability::Deferred);
+    }
+    let mut w = s.begin_write().unwrap();
+    w.put(Table::Objects, &5000u32.to_be_bytes(), &kv_crash_value(5000)).unwrap();
+    // Leave without running destructors: no commit, no journal sync on drop.
+    std::process::exit(42);
+}
+
+/// Kills a writer whose large values are partly in blob files, partly in the journal only, and
+/// recovers: every commit is back, byte for byte, and survives a compaction and a reopen.
+#[test]
+fn kv_separated_abrupt_exit_recovery() {
+    let dir = tempfile::tempdir().unwrap();
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["kv_separated_abrupt_exit_child", "--exact", "--ignored", "--nocapture", "--test-threads=1"])
+        .env(KV_CRASH_ENV, dir.path())
+        .stdout(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert_eq!(status.code(), Some(42), "the child did not reach the crash point");
+    let expected: Vec<(u32, Option<Vec<u8>>)> = (0..140u32)
+        .map(|i| match i {
+            1 => (i, Some(kv_crash_value(1001))),
+            i if i < 100 && i % 4 == 0 => (i, None),
+            i => (i, Some(kv_crash_value(i))),
+        })
+        .chain([(5000, None)])
+        .collect();
+    let opts = kv_options(FjallLayout::SingleKeyspace, 1024);
+    let mut s = open_kv(dir.path(), &opts);
+    assert!(s.blob_file_count() > 0);
+    check_objects(&s, &expected, "after the crash");
+    assert!(s.compact().unwrap());
+    assert_eq!(s.stale_blob_bytes(), 0);
+    check_objects(&s, &expected, "after the crash and compact");
+    drop(s);
+    check_objects(&open_kv(dir.path(), &opts), &expected, "after the crash, compact and reopen");
 }
 
 // ---------------------------------------------------------------------------

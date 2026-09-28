@@ -48,7 +48,8 @@ backend e segue o versionamento dele.
 |---|---|---|
 | redb 4.3 | padrão | um arquivo; cada tabela lógica é uma `TableDefinition<&[u8], &[u8]>` com o nome da §3 |
 | LMDB (heed 0.22) | feature `lmdb` | um diretório com `data.mdb` e `lock.mdb`; cada tabela é um *named database* com o nome da §3 |
-| outros (ex.: fjall) | experimentais, por feature | layout físico documentado no módulo do backend; mesmo conteúdo lógico |
+| fjall 3.1.10 (LSM) | feature `fjall` | um diretório: journal (`<n>.jnl`) e `keyspaces/<id>/` (tabelas LSM; com separação chave-valor, padrão de `open_fjall_wal`, valores ≥ 1 KiB em arquivos de blob em `blobs/`); layout detalhado em `store::fjall` |
+| outros | experimentais, por feature | layout físico documentado no módulo do backend; mesmo conteúdo lógico |
 
 Contrato exigido de qualquer backend:
 
