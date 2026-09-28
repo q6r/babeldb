@@ -17,6 +17,14 @@
 //! unprepared requests (the kind of request ends a batch when it changes;
 //! order is kept). A panic in `prepare` fails that request only.
 //!
+//! Completion: the writer stores every result of the batch first, then wakes
+//! the waiters that sleep as a tree ([`WakeTree`]): it wakes two of them and
+//! every woken waiter wakes two more before it returns. Under load the writer
+//! thread is the bottleneck and each wake-up (a system call and a scheduler
+//! decision) costs it several microseconds, so a batch of N sleeping waiters
+//! costs it two wake-ups instead of N, and the wake-ups of a large batch run
+//! in parallel.
+//!
 //! Guarantees:
 //! - Order: requests are applied in queue (submission) order, so operations
 //!   from one thread, and all operations on one key, keep their order. A
@@ -172,8 +180,12 @@ impl GroupCommitConfig {
 // ---------------------------------------------------------------------------
 
 enum Slot<T> {
-    Waiting { parked: bool },
-    Ready(Result<T>),
+    Waiting {
+        parked: bool,
+    },
+    /// The result, and the wake-ups its waiter owes to other waiters of the
+    /// same batch once it takes the result (see [`WakeTree`]).
+    Ready(Result<T>, Option<WakeDuty<T>>),
     Taken,
 }
 
@@ -183,14 +195,104 @@ struct Completion<T> {
 }
 
 impl<T> Completion<T> {
-    fn set(&self, r: Result<T>) {
+    /// Store the result without waking anybody. Returns whether the waiter
+    /// sleeps on `cv` (it then needs a wake-up to see the result).
+    fn put(&self, r: Result<T>) -> bool {
         let mut slot = lock(&self.slot);
-        if let Slot::Waiting { parked } = *slot {
-            *slot = Slot::Ready(r);
-            drop(slot);
-            if parked {
-                self.cv.notify_all();
+        match *slot {
+            Slot::Waiting { parked } => {
+                *slot = Slot::Ready(r, None);
+                parked
             }
+            _ => false,
+        }
+    }
+
+    fn set(&self, r: Result<T>) {
+        if self.put(r) {
+            self.cv.notify_all();
+        }
+    }
+}
+
+/// Wake-ups handed to a waiter per batch: the writer wakes this many sleeping
+/// waiters, and each of them wakes this many more (a tree), before
+/// returning.
+const WAKE_FANOUT: usize = 2;
+
+/// The waiters of one committed batch that were asleep when their results
+/// were stored, woken as a tree: the writer wakes the first [`WAKE_FANOUT`]
+/// (the roots) and every woken waiter wakes its own children before it
+/// returns. The writer thread, the bottleneck of a busy committer, thus pays
+/// a fixed number of wake-ups per batch instead of one per waiter (each one
+/// is a system call and a scheduler decision: several microseconds), and the
+/// wake-ups of a large batch run in parallel on the woken threads.
+///
+/// Every node is visited exactly once, by its parent: a waiter still waiting
+/// for its result gets the duty of waking its children with the result
+/// (under its slot lock) and a wake-up; a waiter that already took its
+/// result on its own (a timed-out or spurious wake-up) cannot take the duty
+/// any more, so the visitor wakes those children itself. Nobody is left
+/// asleep.
+struct WakeTree<T> {
+    nodes: Vec<Arc<Completion<T>>>,
+}
+
+/// Node `node` of `tree` still has to wake its children.
+struct WakeDuty<T> {
+    tree: Arc<WakeTree<T>>,
+    node: usize,
+}
+
+impl<T> WakeDuty<T> {
+    fn run(self) {
+        self.tree.wake_children(self.node);
+    }
+}
+
+impl<T> WakeTree<T> {
+    /// Wake the sleeping waiters `nodes` (their results are stored).
+    fn start(nodes: Vec<Arc<Completion<T>>>) {
+        if nodes.is_empty() {
+            return;
+        }
+        let tree = Arc::new(WakeTree { nodes });
+        for i in 0..WAKE_FANOUT {
+            tree.wake(i);
+        }
+    }
+
+    /// Children of node `i`: the nodes `WAKE_FANOUT * (i + 1)..` (the roots
+    /// `0..WAKE_FANOUT` are the writer's): each node >= `WAKE_FANOUT` has
+    /// exactly one parent.
+    fn wake_children(self: &Arc<Self>, i: usize) {
+        let first = WAKE_FANOUT.saturating_mul(i.saturating_add(1));
+        for child in first..first.saturating_add(WAKE_FANOUT) {
+            self.wake(child);
+        }
+    }
+
+    fn wake(self: &Arc<Self>, i: usize) {
+        let Some(node) = self.nodes.get(i) else {
+            return;
+        };
+        let mut slot = lock(&node.slot);
+        let handed = match &mut *slot {
+            Slot::Ready(_, duty) if duty.is_none() => {
+                *duty = Some(WakeDuty {
+                    tree: Arc::clone(self),
+                    node: i,
+                });
+                true
+            }
+            _ => false,
+        };
+        drop(slot);
+        if handed {
+            node.cv.notify_all();
+        } else {
+            // The waiter took its result already: its duty is done here.
+            self.wake_children(i);
         }
     }
 }
@@ -209,7 +311,7 @@ impl<T> Pending<T> {
     fn ready(r: Result<T>) -> Pending<T> {
         Pending {
             completion: Arc::new(Completion {
-                slot: Mutex::new(Slot::Ready(r)),
+                slot: Mutex::new(Slot::Ready(r, None)),
                 cv: Condvar::new(),
             }),
         }
@@ -220,7 +322,13 @@ impl<T> Pending<T> {
         let mut slot = lock(&self.completion.slot);
         loop {
             match std::mem::replace(&mut *slot, Slot::Taken) {
-                Slot::Ready(r) => return r,
+                Slot::Ready(r, duty) => {
+                    drop(slot);
+                    if let Some(duty) = duty {
+                        duty.run();
+                    }
+                    return r;
+                }
                 Slot::Taken => return Err(taken_error()),
                 Slot::Waiting { .. } => {
                     *slot = Slot::Waiting { parked: true };
@@ -237,7 +345,13 @@ impl<T> Pending<T> {
         let mut slot = lock(&self.completion.slot);
         loop {
             match std::mem::replace(&mut *slot, Slot::Taken) {
-                Slot::Ready(r) => return Some(r),
+                Slot::Ready(r, duty) => {
+                    drop(slot);
+                    if let Some(duty) = duty {
+                        duty.run();
+                    }
+                    return Some(r);
+                }
                 Slot::Taken => return Some(Err(taken_error())),
                 Slot::Waiting { .. } => {
                     let now = Instant::now();
@@ -267,7 +381,22 @@ impl<T> Pending<T> {
 
     /// Whether the result is available (and not yet taken).
     pub fn is_ready(&self) -> bool {
-        matches!(*lock(&self.completion.slot), Slot::Ready(_))
+        matches!(*lock(&self.completion.slot), Slot::Ready(..))
+    }
+}
+
+impl<T> Drop for Pending<T> {
+    /// A handle dropped with its result untaken still wakes the waiters it
+    /// owes a wake-up (defensive: only a sleeping waiter is handed a duty,
+    /// and it takes its result before it returns).
+    fn drop(&mut self) {
+        let duty = match &mut *lock(&self.completion.slot) {
+            Slot::Ready(_, duty) => duty.take(),
+            _ => None,
+        };
+        if let Some(duty) = duty {
+            duty.run();
+        }
     }
 }
 
@@ -287,6 +416,16 @@ impl<T> Completer<T> {
     fn complete(mut self, r: Result<T>) {
         if let Some(c) = self.completion.take() {
             c.set(r);
+        }
+    }
+
+    /// Store the result without waking the waiter; a sleeping waiter is
+    /// added to `sleepers` (see [`WakeTree`]).
+    fn post(mut self, r: Result<T>, sleepers: &mut Vec<Arc<Completion<T>>>) {
+        if let Some(c) = self.completion.take()
+            && c.put(r)
+        {
+            sleepers.push(c);
         }
     }
 }
@@ -1194,14 +1333,15 @@ fn apply_batch<K: BatchSink + ?Sized>(
 }
 
 /// Hand every request of the batch its own slice of the results, or the
-/// batch error.
+/// batch error, then wake the sleeping waiters as a [`WakeTree`].
 fn complete_batch(sh: &Shared, batch: &mut Batch, outcome: Result<Vec<OpResult>>) {
     let expected: usize = batch.waiters.iter().map(|(_, count)| count).sum();
+    let mut sleepers = Vec::with_capacity(batch.waiters.len());
     match outcome {
         Ok(results) if results.len() == expected => {
             let mut results = results.into_iter();
             for (done, count) in batch.waiters.drain(..) {
-                done.complete(Ok(results.by_ref().take(count).collect()));
+                done.post(Ok(results.by_ref().take(count).collect()), &mut sleepers);
             }
         }
         Ok(results) => {
@@ -1211,16 +1351,17 @@ fn complete_batch(sh: &Shared, batch: &mut Batch, outcome: Result<Vec<OpResult>>
                 results.len()
             );
             for (done, _) in batch.waiters.drain(..) {
-                done.complete(Err(Error::Backend(msg.clone())));
+                done.post(Err(Error::Backend(msg.clone())), &mut sleepers);
             }
         }
         Err(e) => {
             bump(&sh.counters.failed_batches, 1);
             for (done, _) in batch.waiters.drain(..) {
-                done.complete(Err(replicate_error(&e)));
+                done.post(Err(replicate_error(&e)), &mut sleepers);
             }
         }
     }
+    WakeTree::start(sleepers);
 }
 
 #[cfg(test)]
@@ -1271,5 +1412,159 @@ mod tests {
         assert_eq!(single_result(vec![Ok(Some(3))]).ok(), Some(Some(3)));
         assert!(single_result(vec![]).is_err());
         assert!(single_result(vec![Ok(None), Ok(None)]).is_err());
+    }
+
+    /// Run `f` on a thread and fail instead of hanging.
+    fn within<T: Send + 'static>(secs: u64, f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (tx, rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        rx.recv_timeout(Duration::from_secs(secs))
+            .expect("timed out (a waiter was never woken?) or the checked closure panicked")
+    }
+
+    fn wait_for(what: &str, cond: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !cond() {
+            assert!(Instant::now() < deadline, "timed out waiting for: {what}");
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn asleep<T>(c: &Completion<T>) -> bool {
+        matches!(*lock(&c.slot), Slot::Waiting { parked: true })
+    }
+
+    #[test]
+    fn wake_tree_wakes_every_sleeper() {
+        for n in [1usize, 2, 3, 7, 8, 33] {
+            within(30, move || {
+                let (completers, pendings): (Vec<_>, Vec<_>) =
+                    (0..n).map(|_| completion_pair::<usize>()).unzip();
+                let nodes: Vec<_> = pendings.iter().map(|p| p.completion.clone()).collect();
+                let threads: Vec<_> = pendings
+                    .into_iter()
+                    .map(|p| thread::spawn(move || p.wait().unwrap()))
+                    .collect();
+                wait_for("every waiter asleep", || nodes.iter().all(|c| asleep(c)));
+                let mut sleepers = Vec::new();
+                for (i, done) in completers.into_iter().enumerate() {
+                    done.post(Ok(i), &mut sleepers);
+                }
+                assert_eq!(sleepers.len(), n);
+                WakeTree::start(sleepers);
+                let got: Vec<usize> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+                assert_eq!(got, (0..n).collect::<Vec<_>>());
+            });
+        }
+    }
+
+    /// Nodes whose waiter took its result on its own, polls later or drops
+    /// its handle still get their children woken.
+    #[test]
+    fn wake_tree_survives_waiters_that_left_or_never_slept() {
+        within(30, || {
+            let n = 15;
+            let held = |i: usize| matches!(i, 0 | 2 | 3);
+            let (completers, pendings): (Vec<_>, Vec<_>) =
+                (0..n).map(|_| completion_pair::<usize>()).unzip();
+            let nodes: Vec<_> = pendings.iter().map(|p| p.completion.clone()).collect();
+            let mut mine = Vec::new();
+            let mut threads = Vec::new();
+            for (i, p) in pendings.into_iter().enumerate() {
+                if held(i) {
+                    mine.push(p);
+                } else {
+                    threads.push((i, thread::spawn(move || p.wait().unwrap())));
+                }
+            }
+            wait_for("the waiting threads asleep", || {
+                nodes.iter().enumerate().all(|(i, c)| held(i) || asleep(c))
+            });
+            let mut sleepers = Vec::new();
+            for (i, done) in completers.into_iter().enumerate() {
+                done.post(Ok(i), &mut sleepers);
+            }
+            assert_eq!(sleepers.len(), n - 3);
+            let mut mine = mine.into_iter();
+            let (mut p0, p2, mut p3) = (
+                mine.next().unwrap(),
+                mine.next().unwrap(),
+                mine.next().unwrap(),
+            );
+            // Node 0 (a root) took its result before the tree ran: its
+            // children (2 and 3) are visited by the waker itself.
+            assert_eq!(p0.try_wait().unwrap().unwrap(), 0);
+            // Every node is in the tree, asleep or not.
+            WakeTree::start(nodes);
+            // Node 3 polls: it takes its result and wakes 8 and 9.
+            assert_eq!(p3.try_wait().unwrap().unwrap(), 3);
+            // Node 2 never takes its result: dropping its handle wakes 6 and
+            // 7, and 6 wakes 14.
+            drop(p2);
+            for (i, t) in threads {
+                assert_eq!(t.join().unwrap(), i);
+            }
+        });
+    }
+
+    /// Every result reaches its own caller whatever way it waits (blocking,
+    /// timed polls, busy polls) or whether it waits at all.
+    #[test]
+    fn concurrent_waiters_of_every_kind_complete() {
+        struct Counter(AtomicU64);
+        impl BatchSink for Counter {
+            fn apply(&self, ops: &[OwnedOp], _: Durability) -> Result<Vec<OpResult>> {
+                Ok(ops
+                    .iter()
+                    .map(|_| Ok(Some(self.0.fetch_add(1, Ordering::Relaxed) + 1)))
+                    .collect())
+            }
+
+            fn sync(&self) -> Result<()> {
+                Ok(())
+            }
+        }
+        within(60, || {
+            let c = Arc::new(GroupCommitter::new(Counter(AtomicU64::new(0)), GroupCommitConfig::default()).unwrap());
+            let threads: Vec<_> = (0..32u64)
+                .map(|t| {
+                    let c = c.clone();
+                    thread::spawn(move || {
+                        let mut last = 0;
+                        for i in 0..200u64 {
+                            let mut ticket = c.submit(vec![OwnedOp::put(format!("{t}/{i}"), "v", Expect::Any)]).unwrap();
+                            let results = match (t + i) % 4 {
+                                0 => ticket.wait().unwrap(),
+                                1 => loop {
+                                    if let Some(r) = ticket.wait_timeout(Duration::from_micros(50)) {
+                                        break r.unwrap();
+                                    }
+                                },
+                                2 => loop {
+                                    if let Some(r) = ticket.try_wait() {
+                                        break r.unwrap();
+                                    }
+                                    thread::yield_now();
+                                },
+                                _ => {
+                                    drop(ticket);
+                                    continue;
+                                }
+                            };
+                            let rev = single_result(results).unwrap().unwrap();
+                            assert!(rev > last, "revisions of one caller must increase");
+                            last = rev;
+                        }
+                    })
+                })
+                .collect();
+            for t in threads {
+                t.join().unwrap();
+            }
+            c.shutdown().unwrap();
+            assert_eq!(c.stats().ops, 32 * 200);
+        });
     }
 }

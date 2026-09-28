@@ -275,8 +275,19 @@ impl<T: ReadSource + ?Sized> ReadSource for Arc<T> {
     }
 }
 
+/// Requests with at least this many operations, or at least
+/// [`PREPARE_MAX_BYTES`] of keys and values, are not prepared by the
+/// submitting thread: the writer thread encodes them while it applies them
+/// ([`Db::write_batch_each`] overlaps the two over helper threads from 64
+/// values on), which finishes a lone large request (a bulk load) sooner than
+/// encoding all of it first.
+const PREPARE_MAX_OPS: usize = 64;
+/// See [`PREPARE_MAX_OPS`].
+const PREPARE_MAX_BYTES: usize = 1 << 20;
+
 /// A database prepares requests ([`Db::prepare_batch`] without copies) in
-/// the submitting thread and applies them with [`Db::write_prepared_each`].
+/// the submitting thread and applies them with [`Db::write_prepared_each`];
+/// large requests ([`PREPARE_MAX_OPS`]) are left to [`Db::write_batch_each`].
 impl<S: Store> BatchSink for Db<S> {
     fn apply(&self, ops: &[OwnedOp], durability: Durability) -> Result<Vec<OpResult>> {
         let batch: Vec<BatchOp<'_>> = ops.iter().map(OwnedOp::as_batch_op).collect();
@@ -288,6 +299,12 @@ impl<S: Store> BatchSink for Db<S> {
     }
 
     fn prepare(&self, ops: Vec<OwnedOp>) -> SinkOps {
+        let bytes = ops
+            .iter()
+            .fold(0usize, |acc, op| acc.saturating_add(op.payload_bytes()));
+        if ops.len() >= PREPARE_MAX_OPS || bytes >= PREPARE_MAX_BYTES {
+            return SinkOps::Owned(ops);
+        }
         SinkOps::Prepared(self.prepare_owned(ops.into_iter().map(|op| match op {
             OwnedOp::Put { key, value, expect } => (key, Some(value), expect),
             OwnedOp::Delete { key, expect } => (key, None, expect),
