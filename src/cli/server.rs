@@ -50,6 +50,18 @@
 //! buffered. [`Client::pipeline`] sends many requests before reading their
 //! replies.
 //!
+//! # Transfer
+//!
+//! Every connection asks for a 4 MiB receive buffer ([`SOCKET_RECV_BUFFER`],
+//! Windows; both ends): with the default one, a 1 MiB request/reply takes
+//! about three times as long on loopback (measured on the benchmark machine,
+//! Windows 11). Values of at least [`protocol::SPLICE_MIN`] bytes are not
+//! copied into frame buffers: replies are written with the engine's value
+//! buffers in one vectored write, the client sends its values the same way and
+//! reads reply values straight into the vectors it returns, and a connection
+//! reads requests into a buffer it keeps (up to 32 MiB), so that large
+//! requests do not land in fresh allocations.
+//!
 //! # Stopping
 //!
 //! [`ServerHandle::stop`] closes every connection, joins every thread and
@@ -65,6 +77,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufReader, Read, Write};
 use std::net::{Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
+use std::ops::Bound;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, mpsc};
@@ -87,8 +100,24 @@ const READ_BUFFER: usize = 64 * 1024;
 const STOP_POLL: Duration = Duration::from_millis(50);
 /// A client that does not accept its response for this long is disconnected.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
-/// Per-connection buffers larger than this are released after use.
-const KEEP_BUFFER: usize = 1 << 20;
+/// Reply buffers (server) and request buffers (client) larger than this are
+/// released after use (values of [`protocol::SPLICE_MIN`] bytes or more never
+/// go into them).
+const KEEP_BUFFER: usize = 4 << 20;
+/// A connection keeps its request buffer up to this size (bulk loads send
+/// frames of up to 16 MiB of values: `benches/compare.rs`), so that large
+/// requests are not read into fresh allocations.
+const KEEP_REQUEST_BUFFER: usize = 32 << 20;
+/// Receive buffer (`SO_RCVBUF`) asked for on every connection, server and
+/// client side (Windows only; elsewhere the system's auto-tuning is kept).
+/// Measured on Windows 11, loopback, 1 MiB frames: the default buffer moves
+/// 0.59 GB/s streamed and takes 3.6-4.0 ms per 1 MiB request/reply, 2-8 MiB
+/// move 1.0 GB/s and take 1.1-1.4 ms (the receive side is what matters).
+pub const SOCKET_RECV_BUFFER: usize = 4 << 20;
+/// Most items of one SCAN_RANGE page.
+pub const SCAN_PAGE_ITEMS: usize = 1 << 16;
+/// Default [`ServerConfig::scan_page_bytes`].
+pub const DEFAULT_SCAN_PAGE_BYTES: usize = 16 << 20;
 /// Pending replies are sent once they reach this size, even while more
 /// complete requests are buffered.
 const FLUSH_BYTES: usize = 256 * 1024;
@@ -125,6 +154,10 @@ pub struct ServerConfig {
     /// Run the committer's writer thread at a raised priority (Windows:
     /// `THREAD_PRIORITY_HIGHEST`; no effect elsewhere). Default `true`.
     pub raise_commit_priority: bool,
+    /// Size a SCAN_RANGE page is cut at (frame bytes; the first item of a
+    /// page may exceed it up to `MAX_FRAME_LEN`). Default
+    /// [`DEFAULT_SCAN_PAGE_BYTES`].
+    pub scan_page_bytes: usize,
 }
 
 impl ServerConfig {
@@ -138,6 +171,7 @@ impl ServerConfig {
             },
             max_inflight_writes: DEFAULT_MAX_INFLIGHT_WRITES,
             raise_commit_priority: true,
+            scan_page_bytes: DEFAULT_SCAN_PAGE_BYTES,
         }
     }
 
@@ -196,6 +230,7 @@ struct Env<S: Store> {
     committer: Arc<GroupCommitter>,
     shared: Arc<Shared>,
     max_inflight: usize,
+    scan_page_bytes: usize,
 }
 
 /// A running server. `stop` (or dropping the handle) shuts it down: open
@@ -241,6 +276,8 @@ pub fn serve_with<S: Store>(
 ) -> io::Result<ServerHandle> {
     let threads = cfg.threads.max(1);
     let addr = listener.local_addr()?;
+    // Accepted connections inherit it (it then also shapes their handshake).
+    set_recv_buffer(&listener, SOCKET_RECV_BUFFER);
     let sink = CommitSink {
         db: Arc::clone(&db),
         raise: AtomicBool::new(cfg.raise_commit_priority),
@@ -276,6 +313,7 @@ pub fn serve_with<S: Store>(
             committer: Arc::clone(&committer),
             shared: Arc::clone(&shared),
             max_inflight: cfg.max_inflight_writes.max(1),
+            scan_page_bytes: cfg.scan_page_bytes.max(1),
         };
         let rx = Arc::clone(&rx);
         let worker = thread::Builder::new()
@@ -435,6 +473,28 @@ fn raise_current_thread_priority() {
 #[cfg(not(windows))]
 fn raise_current_thread_priority() {}
 
+/// Ask for a receive buffer of `bytes` on a socket (`SO_RCVBUF`); a failure
+/// leaves the system's default.
+#[cfg(windows)]
+fn set_recv_buffer<T: std::os::windows::io::AsRawSocket>(socket: &T, bytes: usize) {
+    use windows_sys::Win32::Networking::WinSock::{SO_RCVBUF, SOL_SOCKET, setsockopt};
+    let value = i32::try_from(bytes).unwrap_or(i32::MAX).to_ne_bytes();
+    // SAFETY: `socket` is an open socket for the whole call, and `value` holds
+    // the 4 bytes of the `i32` SO_RCVBUF expects; the call only reads them.
+    unsafe {
+        setsockopt(
+            socket.as_raw_socket() as usize,
+            SOL_SOCKET,
+            SO_RCVBUF,
+            value.as_ptr(),
+            value.len() as i32,
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn set_recv_buffer<T>(_socket: &T, _bytes: usize) {}
+
 /// Address to connect to in order to reach a listener bound to `addr`.
 fn wake_addr(mut addr: SocketAddr) -> SocketAddr {
     if addr.ip().is_unspecified() {
@@ -572,6 +632,7 @@ fn frame_buffered(buf: &[u8]) -> bool {
 fn serve_connection<S: Store>(env: &Env<S>, stream: TcpStream) {
     let shared = &*env.shared;
     let _ = stream.set_nodelay(true);
+    set_recv_buffer(&stream, SOCKET_RECV_BUFFER);
     let (Ok(registered), Ok(read_half)) = (stream.try_clone(), stream.try_clone()) else {
         return;
     };
@@ -604,8 +665,10 @@ fn serve_connection<S: Store>(env: &Env<S>, stream: TcpStream) {
         env,
         writer: stream,
         out: Vec::new(),
+        spliced: Vec::new(),
         inflight: VecDeque::new(),
     };
+    // Request frames: `body[..len]` (the buffer keeps its largest length).
     let mut body = Vec::new();
     loop {
         // When the next read may block, everything received so far is
@@ -616,29 +679,27 @@ fn serve_connection<S: Store>(env: &Env<S>, stream: TcpStream) {
         if shared.stop.load(Ordering::Relaxed) {
             break;
         }
-        match protocol::read_frame(&mut reader, &mut body) {
-            Ok(true) => {
+        match protocol::read_frame_reuse(&mut reader, &mut body) {
+            Ok(Some(len)) => {
                 let c = &shared.counters;
                 c.requests.fetch_add(1, Ordering::Relaxed);
-                c.bytes_in.fetch_add(
-                    (protocol::LEN_PREFIX + body.len()) as u64,
-                    Ordering::Relaxed,
-                );
-                conn.handle(&body);
+                c.bytes_in
+                    .fetch_add((protocol::LEN_PREFIX + len) as u64, Ordering::Relaxed);
+                conn.handle(&body[..len]);
             }
-            Ok(false) => break,
+            Ok(None) => break,
             Err(e @ (ProtocolError::FrameTooLarge { .. } | ProtocolError::EmptyFrame)) => {
                 // The stream can no longer be delimited: answer, then close.
-                conn.reply(&Reply::Error(format!("{e}; closing the connection")));
+                conn.reply(Reply::Error(format!("{e}; closing the connection")));
                 let _ = conn.flush();
                 break;
             }
             Err(_) => break,
         }
-        if conn.out.len() >= FLUSH_BYTES && conn.flush().is_err() {
+        if conn.pending_bytes() >= FLUSH_BYTES && conn.flush().is_err() {
             break;
         }
-        if body.capacity() > KEEP_BUFFER {
+        if body.capacity() > KEEP_REQUEST_BUFFER {
             body = Vec::new();
         }
     }
@@ -660,8 +721,10 @@ enum WriteKind {
 struct Connection<'a, S: Store> {
     env: &'a Env<S>,
     writer: TcpStream,
-    /// Encoded replies not sent yet, in request order.
+    /// Encoded replies not sent yet, in request order, without their large
+    /// values: those are in `spliced` (see [`protocol::write_spliced`]).
     out: Vec<u8>,
+    spliced: Vec<(usize, Vec<u8>)>,
     /// Submitted writes, oldest first; their replies follow `out`.
     inflight: VecDeque<(WriteKind, Ticket)>,
 }
@@ -670,20 +733,20 @@ impl<S: Store> Connection<'_, S> {
     fn handle(&mut self, body: &[u8]) {
         let request = match Request::decode(body) {
             Ok(r) => r,
-            Err(e) => return self.reply(&Reply::Error(format!("bad request: {e}"))),
+            Err(e) => return self.reply(Reply::Error(format!("bad request: {e}"))),
         };
         let env = self.env;
         let db = &*env.db;
         match request {
             Request::Put { key, value } => match validate_put(db, key, value) {
                 Ok(()) => self.submit(WriteKind::Put, vec![OwnedOp::put(key, value, Expect::Any)]),
-                Err(e) => self.reply(&Reply::Error(e.to_string())),
+                Err(e) => self.reply(Reply::Error(e.to_string())),
             },
             Request::Delete { key } => {
                 self.submit(WriteKind::Delete, vec![OwnedOp::delete(key, Expect::Any)]);
             }
             Request::PutBatch { items } if items.is_empty() => {
-                self.reply(&Reply::Revisions(Vec::new()));
+                self.reply(Reply::Revisions(Vec::new()));
             }
             Request::PutBatch { items } => {
                 // All or nothing: one invalid item rejects the batch before
@@ -696,14 +759,14 @@ impl<S: Store> Connection<'_, S> {
                             .collect();
                         self.submit(WriteKind::PutBatch, ops);
                     }
-                    Err(e) => self.reply(&Reply::Error(e.to_string())),
+                    Err(e) => self.reply(Reply::Error(e.to_string())),
                 }
             }
             read => {
                 // Read-your-writes: the connection's earlier writes first.
                 self.settle();
-                let reply = guarded(|| execute(db, read));
-                self.push(&reply);
+                let reply = guarded(|| execute(db, read, env.scan_page_bytes));
+                self.push(reply);
             }
         }
     }
@@ -715,12 +778,12 @@ impl<S: Store> Connection<'_, S> {
         }
         match self.env.committer.submit(ops) {
             Ok(ticket) => self.inflight.push_back((kind, ticket)),
-            Err(e) => self.reply(&Reply::Error(e.to_string())),
+            Err(e) => self.reply(Reply::Error(e.to_string())),
         }
     }
 
     /// Queue a reply produced now: after the replies of the earlier writes.
-    fn reply(&mut self, reply: &Reply) {
+    fn reply(&mut self, reply: Reply) {
         self.settle();
         self.push(reply);
     }
@@ -729,22 +792,33 @@ impl<S: Store> Connection<'_, S> {
     fn settle(&mut self) {
         while let Some((kind, ticket)) = self.inflight.pop_front() {
             let reply = write_reply(kind, ticket.wait());
-            self.push(&reply);
+            self.push(reply);
         }
     }
 
-    fn push(&mut self, reply: &Reply) {
-        push_reply(&mut self.out, reply, &self.env.shared.counters);
+    fn push(&mut self, reply: Reply) {
+        push_reply(
+            &mut self.out,
+            &mut self.spliced,
+            reply,
+            &self.env.shared.counters,
+        );
     }
 
-    /// Settle, then send every queued reply in one write.
+    /// Bytes of the queued replies.
+    fn pending_bytes(&self) -> usize {
+        self.out.len() + self.spliced.iter().map(|(_, v)| v.len()).sum::<usize>()
+    }
+
+    /// Settle, then send every queued reply in one (vectored) write.
     fn flush(&mut self) -> io::Result<()> {
         self.settle();
         if self.out.is_empty() {
             return Ok(());
         }
-        let sent = self.writer.write_all(&self.out);
+        let sent = protocol::write_spliced(&mut self.writer, &self.out, &self.spliced);
         self.out.clear();
+        self.spliced.clear();
         if self.out.capacity() > KEEP_BUFFER {
             self.out = Vec::new();
         }
@@ -795,23 +869,30 @@ fn write_reply(kind: WriteKind, outcome: crate::Result<Vec<OpResult>>) -> Reply 
     }
 }
 
-/// Append the frame of `reply` to `out` (an ERROR instead when it cannot be
-/// encoded) and account for it.
-fn push_reply(out: &mut Vec<u8>, reply: &Reply, counters: &Counters) {
-    let start = out.len();
+/// Append the frame of `reply` to `out`, its large values moved to `spliced`
+/// (an ERROR instead when it cannot be encoded), and account for it.
+fn push_reply(
+    out: &mut Vec<u8>,
+    spliced: &mut Vec<(usize, Vec<u8>)>,
+    reply: Reply,
+    counters: &Counters,
+) {
+    let (start, first) = (out.len(), spliced.len());
     let mut is_error = matches!(reply, Reply::Error(_));
-    if let Err(e) = reply.encode(out) {
-        // Typically a response above MAX_FRAME_LEN; `encode` left `out` as it
-        // was. An ERROR (at most MAX_ERROR_MESSAGE bytes) always fits.
+    if let Err(e) = reply.encode_spliced(out, spliced) {
+        // Typically a response above MAX_FRAME_LEN; `encode_spliced` left
+        // `out` and `spliced` as they were. An ERROR (at most
+        // MAX_ERROR_MESSAGE bytes) always fits.
         let _ = Reply::Error(format!("response not sent: {e}")).encode(out);
         is_error = true;
     }
     if is_error {
         counters.error_replies.fetch_add(1, Ordering::Relaxed);
     }
+    let aside: usize = spliced[first..].iter().map(|(_, v)| v.len()).sum();
     counters
         .bytes_out
-        .fetch_add((out.len() - start) as u64, Ordering::Relaxed);
+        .fetch_add((out.len() - start + aside) as u64, Ordering::Relaxed);
 }
 
 /// Panics turned into ERROR replies, so one failing request never takes a
@@ -832,13 +913,14 @@ fn guarded(f: impl FnOnce() -> Reply) -> Reply {
 /// them through its group committer).
 pub fn handle_request<S: Store>(db: &Db<S>, body: &[u8]) -> Reply {
     match Request::decode(body) {
-        Ok(request) => execute(db, request),
+        Ok(request) => execute(db, request, DEFAULT_SCAN_PAGE_BYTES),
         Err(e) => Reply::Error(format!("bad request: {e}")),
     }
 }
 
-/// Run one decoded request directly against `db`.
-fn execute<S: Store>(db: &Db<S>, request: Request<'_>) -> Reply {
+/// Run one decoded request directly against `db` (SCAN_RANGE pages are cut
+/// at `page_bytes`).
+fn execute<S: Store>(db: &Db<S>, request: Request<'_>, page_bytes: usize) -> Reply {
     let result = match request {
         Request::Ping => Ok(Reply::Done),
         Request::Get { key } => db.get(key).map(|v| v.map_or(Reply::NotFound, Reply::Value)),
@@ -865,6 +947,13 @@ fn execute<S: Store>(db: &Db<S>, request: Request<'_>) -> Reply {
                 .with_values(with_values);
             db.scan(&opts).map(Reply::Items)
         }
+        Request::ScanRange {
+            start,
+            end,
+            limit,
+            reverse,
+            with_values,
+        } => scan_page(db, start, end, limit, reverse, with_values, page_bytes),
         Request::PutBatch { items } if items.is_empty() => Ok(Reply::Revisions(Vec::new())),
         Request::PutBatch { items } => {
             let ops: Vec<BatchOp<'_>> = items
@@ -880,6 +969,106 @@ fn execute<S: Store>(db: &Db<S>, request: Request<'_>) -> Reply {
         }
     };
     result.unwrap_or_else(|e| Reply::Error(e.to_string()))
+}
+
+/// One SCAN_RANGE page (see [`crate::cli::protocol`]). A key-only scan first
+/// sizes the items (key and value lengths), so that no more values are read
+/// than the page holds; the values are then read with the request's bounds up
+/// to the items that fit, in one snapshot. When the whole result fits, that
+/// second scan returns exactly `Db::scan` of the request (checking one item
+/// further tells whether writes in between extended the range).
+fn scan_page<S: Store>(
+    db: &Db<S>,
+    start: Bound<&[u8]>,
+    end: Bound<&[u8]>,
+    limit: u32,
+    reverse: bool,
+    with_values: bool,
+    page_bytes: usize,
+) -> crate::Result<Reply> {
+    let want = if limit == 0 {
+        usize::MAX
+    } else {
+        limit as usize
+    };
+    let cap = want.min(SCAN_PAGE_ITEMS);
+    let mut opts = ScanOptions {
+        start: start.map(<[u8]>::to_vec),
+        end: end.map(<[u8]>::to_vec),
+        reverse,
+        // One item past a full page tells whether the range goes on.
+        limit: if cap < want { cap + 1 } else { cap },
+        with_values: false,
+    };
+    let heads = db.scan(&opts)?;
+    if heads.is_empty() {
+        return Ok(Reply::Page {
+            items: heads,
+            more: false,
+        });
+    }
+    let max_frame = u64::from(protocol::MAX_FRAME_LEN);
+    let mut size = protocol::PAGE_HEADER_LEN;
+    let mut fit = 0;
+    for head in heads.iter().take(cap) {
+        let len =
+            protocol::scan_item_wire_len(head.key.len(), with_values.then_some(head.logical_len));
+        let total = size.saturating_add(len);
+        if total > max_frame || (fit > 0 && total > page_bytes as u64) {
+            break;
+        }
+        size = total;
+        fit += 1;
+    }
+    if fit == 0 {
+        return Ok(item_too_large(&heads[0]));
+    }
+    let cut = fit < heads.len();
+    if !with_values {
+        let mut items = heads;
+        items.truncate(fit);
+        return Ok(Reply::Page { items, more: cut });
+    }
+    // The key-only scan saw the whole result: check one item further.
+    let probe = !cut && fit < want;
+    opts.limit = if probe { fit + 1 } else { fit };
+    opts.with_values = true;
+    let mut items = db.scan(&opts)?;
+    let mut more = if probe {
+        items.len() > fit
+    } else {
+        cut && items.len() == fit
+    };
+    items.truncate(fit);
+    // Values written since the key-only scan may be larger: the page must
+    // still fit in a frame.
+    let mut size = protocol::PAGE_HEADER_LEN;
+    let keep = items
+        .iter()
+        .take_while(|item| {
+            let value_len = item.value.as_ref().map(|v| v.len() as u64);
+            size = size.saturating_add(protocol::scan_item_wire_len(item.key.len(), value_len));
+            size <= max_frame
+        })
+        .count();
+    if keep < items.len() {
+        if keep == 0 {
+            return Ok(item_too_large(&items[0]));
+        }
+        items.truncate(keep);
+        more = true;
+    }
+    Ok(Reply::Page { items, more })
+}
+
+/// The ERROR of a SCAN_RANGE whose next item cannot fit in a frame.
+fn item_too_large(item: &ScanItem) -> Reply {
+    Reply::Error(format!(
+        "the scan item of key {:?} (value of {} bytes) does not fit in a frame of {} bytes; read its value with RANGE",
+        String::from_utf8_lossy(&item.key),
+        item.logical_len,
+        protocol::MAX_FRAME_LEN
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -911,10 +1100,15 @@ fn misuse(message: String) -> ProtocolError {
     ProtocolError::Io(io::Error::new(io::ErrorKind::InvalidInput, message))
 }
 
+fn slice_bound(bound: &Bound<Vec<u8>>) -> Bound<&[u8]> {
+    bound.as_ref().map(Vec::as_slice)
+}
+
 impl Client {
     pub fn connect<A: ToSocketAddrs>(addr: A) -> Result<Client, ProtocolError> {
         let stream = TcpStream::connect(addr)?;
         stream.set_nodelay(true)?;
+        set_recv_buffer(&stream, SOCKET_RECV_BUFFER);
         let reader = BufReader::with_capacity(READ_BUFFER, stream.try_clone()?);
         Ok(Client {
             writer: stream,
@@ -946,17 +1140,17 @@ impl Client {
         }
     }
 
-    /// One request, one reply: the request and its frame in one write.
+    /// One request, one reply: the request in one (vectored) write, its
+    /// large values sent from the caller's buffers; the reply's values are
+    /// read straight into the vectors returned.
     fn exchange(&mut self, request: &Request<'_>) -> Result<Reply, ProtocolError> {
         self.out.clear();
-        request.encode(&mut self.out)?;
-        let sent = self.writer.write_all(&self.out);
+        let mut spliced = Vec::new();
+        request.encode_spliced(&mut self.out, &mut spliced)?;
+        let sent = protocol::write_spliced(&mut self.writer, &self.out, &spliced);
         self.release_out();
         sent?;
-        if !protocol::read_frame(&mut self.reader, &mut self.body)? {
-            return Err(ProtocolError::Closed);
-        }
-        Reply::decode(request.op(), &self.body)
+        protocol::read_reply(&mut self.reader, request.op())?.ok_or(ProtocolError::Closed)
     }
 
     fn release_out(&mut self) {
@@ -995,11 +1189,9 @@ impl Client {
             return Err(misuse("recv without a request awaiting its reply".into()));
         };
         self.send()?;
-        if !protocol::read_frame(&mut self.reader, &mut self.body)? {
-            return Err(ProtocolError::Closed);
-        }
+        let reply = protocol::read_reply(&mut self.reader, op)?.ok_or(ProtocolError::Closed)?;
         self.pending.pop_front();
-        Reply::decode(op, &self.body)
+        Ok(reply)
     }
 
     /// Send `requests` and read their replies, in order, keeping at most
@@ -1154,6 +1346,51 @@ impl Client {
             Reply::Value(v) => Ok(Some(v)),
             Reply::NotFound => Ok(None),
             other => Err(unexpected(&other)),
+        }
+    }
+
+    /// `Db::scan(opts)` through SCAN_RANGE: the pages of the result are
+    /// requested one after the other and concatenated (each page is one
+    /// snapshot; a result of several pages is not). `opts.limit == 0` means
+    /// no limit.
+    pub fn scan(&mut self, opts: &ScanOptions) -> Result<Vec<ScanItem>, ProtocolError> {
+        let mut items: Vec<ScanItem> = Vec::new();
+        loop {
+            let left = match opts.limit {
+                0 => 0,
+                n => u32::try_from(n - items.len()).unwrap_or(u32::MAX),
+            };
+            let mut start = slice_bound(&opts.start);
+            let mut end = slice_bound(&opts.end);
+            if let Some(last) = items.last() {
+                // The next page starts after the last key received.
+                let after = Bound::Excluded(last.key.as_slice());
+                if opts.reverse {
+                    end = after;
+                } else {
+                    start = after;
+                }
+            }
+            let request = Request::ScanRange {
+                start,
+                end,
+                limit: left,
+                reverse: opts.reverse,
+                with_values: opts.with_values,
+            };
+            let (page, more) = match self.call(&request)? {
+                Reply::Page { items, more } => (items, more),
+                other => return Err(unexpected(&other)),
+            };
+            let done = !more || page.is_empty();
+            items.extend(page);
+            if opts.limit != 0 && items.len() >= opts.limit {
+                items.truncate(opts.limit);
+                return Ok(items);
+            }
+            if done {
+                return Ok(items);
+            }
         }
     }
 
