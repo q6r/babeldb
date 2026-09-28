@@ -185,6 +185,37 @@
 //!   runs without it, at half the overwrite throughput (~50 against ~105
 //!   MB/s); fjall starts delaying commits at 4 sealed memtables or 20 runs.
 //!
+//! # Compaction watchdog
+//!
+//! fjall 3.1.10 schedules compactions only when a memtable flush completes
+//! (four `Compact` messages per flush, `worker_pool.rs`), and a compaction run
+//! does not schedule the next one (`compaction/worker.rs`: "TODO: we need
+//! feedback from the compaction strategy"). After each commit,
+//! `Keyspace::local_backpressure` sleeps while a keyspace has 30 or more
+//! level-0 runs. So when level 0 reaches 30 runs while the scheduled
+//! compactions have already run (they found their tables taken by a running
+//! compaction, or had nothing to do then), the committing thread sleeps with
+//! the writer lock held, nothing flushes any more, nothing schedules a
+//! compaction, and every writer waits forever. Measured: 16 and 64 concurrent
+//! writers of incompressible 1 MiB values without key-value separation
+//! (`benches/compare.rs`, `BABEL_FJALL_KV=off`, `--value-size 1mi --scenario
+//! s5 --phases load,put-mt --put-threads 16,64`) stopped for good at 30 level-0
+//! runs, 0% CPU, no file writes; a first halt at 30 runs had been released
+//! after 10 s by a compaction that was still running.
+//!
+//! Every store therefore runs a watchdog thread: every 50 ms it runs one
+//! compaction (the keyspace's own strategy, through the `#[doc(hidden)]`
+//! `tree` and `config` fields) of each keyspace with 20 or more level-0 runs,
+//! where fjall starts delaying commits. Its sequence-number threshold is 0, so
+//! it drops no version that a snapshot may still read (fjall's own compactions
+//! collect that garbage later). A compaction whose tables are taken by a
+//! running one returns at once; a failed one pauses the watchdog for 1 s.
+//! With it, the run above completed (put-mt x16 72 ops/s, max latency 5.2 s;
+//! x64 78 ops/s; level 0 peaked at 31 runs). With key-value separation (the
+//! default of [`FjallOptions::for_wal`]) the same run kept level 0 at 5 runs
+//! or fewer (x16 146 ops/s, max 261 ms). Dropping the store stops and joins
+//! the thread before anything else is dropped.
+//!
 //! # Tuning ([`FjallOptions`])
 //!
 //! Applied when a keyspace is created: fjall persists every keyspace setting,
@@ -239,6 +270,15 @@ pub const SINGLE_KEYSPACE: &str = "tables";
 
 /// Upper bound on the wait for memtable flushes (`compact`, `flush_memtables`).
 const FLUSH_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Level-0 runs from which the compaction watchdog runs compactions itself
+/// (where fjall 3.1.10 starts delaying commits; module documentation,
+/// *Compaction watchdog*).
+const WATCHDOG_L0_RUNS: usize = 20;
+/// How often the compaction watchdog looks at the level-0 runs.
+const WATCHDOG_INTERVAL: Duration = Duration::from_millis(50);
+/// Pause of the watchdog after a failed compaction.
+const WATCHDOG_BACKOFF: Duration = Duration::from_secs(1);
 
 /// Data block sizes fjall accepts.
 const MIN_DATA_BLOCK: u32 = 1 << 10;
@@ -516,8 +556,59 @@ fn table_tag(table: Table) -> u8 {
 
 type PhysicalRange = (Bound<Vec<u8>>, Bound<Vec<u8>>);
 
+/// Thread that runs compactions while fjall does not (module documentation,
+/// *Compaction watchdog*). Dropping it stops and joins the thread, which then
+/// drops its keyspace handles.
+struct Watchdog {
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Watchdog {
+    fn start(keyspaces: Vec<SingleWriterTxKeyspace>) -> Result<Watchdog> {
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        let thread = std::thread::Builder::new()
+            .name("babeldb-fjall-watchdog".into())
+            .spawn(move || watchdog_loop(&keyspaces, &flag))?;
+        Ok(Watchdog { stop, thread: Some(thread) })
+    }
+}
+
+impl Drop for Watchdog {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            thread.thread().unpark();
+            let _ = thread.join();
+        }
+    }
+}
+
+fn watchdog_loop(keyspaces: &[SingleWriterTxKeyspace], stop: &AtomicBool) {
+    while !stop.load(Ordering::Acquire) {
+        let mut pause = WATCHDOG_INTERVAL;
+        for ks in keyspaces {
+            let ks = ks.inner();
+            if ks.tree.l0_run_count() >= WATCHDOG_L0_RUNS {
+                // Sequence number threshold 0: no version counts as garbage, so
+                // none that a snapshot may still read is dropped (fjall's own
+                // compactions collect it later). A compaction that finds its
+                // tables taken by a running one returns at once.
+                if ks.tree.compact(ks.config.compaction_strategy.clone(), 0).is_err() {
+                    pause = WATCHDOG_BACKOFF;
+                }
+            }
+        }
+        std::thread::park_timeout(pause);
+    }
+}
+
 /// A fjall database in a dedicated directory.
 pub struct FjallStore {
+    /// Declared first: its thread (holding keyspace handles) is stopped before
+    /// anything else is dropped.
+    _watchdog: Watchdog,
     /// Declared before `db`: cached snapshots are released before the database.
     snapshots: Box<[SnapshotSlot]>,
     db: SingleWriterTxDatabase,
@@ -595,7 +686,12 @@ impl FjallStore {
             }
         };
         let snapshots = (0..SNAPSHOT_SHARDS).map(|_| SnapshotSlot::default()).collect();
+        let distinct = match layout {
+            FjallLayout::SingleKeyspace => keyspaces[..1].to_vec(),
+            FjallLayout::KeyspacePerTable => keyspaces.clone(),
+        };
         Ok(FjallStore {
+            _watchdog: Watchdog::start(distinct)?,
             snapshots,
             db,
             keyspaces,
