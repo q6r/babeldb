@@ -189,7 +189,7 @@ carga em lote. Harness com fases opcionais: `update`, `delete`, `range`, `mixed9
 | chat 100 k × 512 B, relaxado | **28 de 31** | só `range` (sem suporte TCP) |
 | 50 k × 4 KiB (texto) | 23 de 31 | update/delete concorrentes (0,68–0,97 do PG) |
 | 10 k × 64 KiB (incompressível) | 17 de 31 | `latest` (0,63–0,82 do PG), update/delete concorrentes (até 0,35 do Mongo), put com 4 clientes |
-| 2 k × 1 MiB (texto) | 12 de 25 | put, get, update e delete (0,22–0,92) |
+| 2 k × 1 MiB (texto) | 10 de 25 (+2 empates) | put, get, update e delete (0,22–0,92); `range` sem suporte TCP |
 | 2 k × 1 MiB (incompressível) | 2 de 25 | quase tudo; delete concorrente até 0,05 do Mongo |
 
 ### Destaques da carga de chat (ops/s, durável, localhost TCP)
