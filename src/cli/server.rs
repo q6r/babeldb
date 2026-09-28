@@ -21,7 +21,12 @@
 //! at normal priority they preempt the writer and stretch the next commit
 //! (16 clients: typically 20-30% fewer durable puts per second, more on a
 //! busy machine), so the writer runs at a raised priority
-//! ([`ServerConfig::raise_commit_priority`]).
+//! ([`ServerConfig::raise_commit_priority`]). For the same reason the writer
+//! thread only runs transactions: each worker validates and encodes its own
+//! request before queueing it ([`BatchSink::prepare`]; large requests, such
+//! as bulk loads, are encoded by the writer, overlapped with their
+//! transaction), and the writer wakes two waiters of a finished commit, which
+//! wake the others (see [`crate::scale::group_commit`]).
 //!
 //! # Acknowledgements
 //!
@@ -71,8 +76,8 @@ use super::protocol::{self, ProtocolError, Reply, Request};
 use crate::engine::{BatchOp, Db, Expect, Revision, ScanItem, ScanOptions};
 use crate::scale::group_commit::single_result;
 use crate::scale::{
-    BatchSink, GroupCommitConfig, GroupCommitStats, GroupCommitter, OpResult, OwnedOp, Ticket,
-    WriteDurability,
+    BatchSink, GroupCommitConfig, GroupCommitStats, GroupCommitter, OpResult, OwnedOp, PreparedOp,
+    SinkOps, Ticket, WriteDurability,
 };
 use crate::store::{Durability, Store};
 
@@ -369,9 +374,11 @@ impl Drop for ServerHandle {
     }
 }
 
-/// The committer's sink: the database, and on the first call (made by the
-/// writer thread, the only caller) the priority raise of that thread
-/// ([`ServerConfig::raise_commit_priority`]).
+/// The committer's sink: the database, and on the first commit (made by the
+/// writer thread, the only thread that commits) the priority raise of that
+/// thread ([`ServerConfig::raise_commit_priority`]). Requests are prepared
+/// (validated and encoded) by the database in the workers that submit them
+/// ([`BatchSink::prepare`]), so the writer thread only runs transactions.
 struct CommitSink<S: Store> {
     db: Arc<Db<S>>,
     /// The raise is still to be done.
@@ -379,7 +386,8 @@ struct CommitSink<S: Store> {
 }
 
 impl<S: Store> CommitSink<S> {
-    fn prepare(&self) {
+    /// Called by the writer thread before each commit.
+    fn raise_once(&self) {
         if self.raise.load(Ordering::Relaxed) && self.raise.swap(false, Ordering::Relaxed) {
             raise_current_thread_priority();
         }
@@ -388,13 +396,27 @@ impl<S: Store> CommitSink<S> {
 
 impl<S: Store> BatchSink for CommitSink<S> {
     fn apply(&self, ops: &[OwnedOp], durability: Durability) -> crate::Result<Vec<OpResult>> {
-        self.prepare();
+        self.raise_once();
         BatchSink::apply(&*self.db, ops, durability)
     }
 
     fn sync(&self) -> crate::Result<()> {
-        self.prepare();
+        self.raise_once();
         BatchSink::sync(&*self.db)
+    }
+
+    /// Runs in the submitting worker (its priority is left alone).
+    fn prepare(&self, ops: Vec<OwnedOp>) -> SinkOps {
+        BatchSink::prepare(&*self.db, ops)
+    }
+
+    fn apply_prepared(
+        &self,
+        ops: Vec<PreparedOp>,
+        durability: Durability,
+    ) -> crate::Result<Vec<OpResult>> {
+        self.raise_once();
+        BatchSink::apply_prepared(&*self.db, ops, durability)
     }
 }
 
