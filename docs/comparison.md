@@ -217,9 +217,75 @@ carga em lote. Harness com fases opcionais: `update`, `delete`, `range`, `mixed9
    numa página de 16 KiB); no fjall compactado empata com PG/Mongo, mas antes de compactar fica
    acima.
 
-## Rodada 5 (planejada)
+## Rodada 5 (28/09/2026)
 
-1. Caminho de valores grandes: liberar objetos sem ler o corpo; limiar inline maior; separação
-   chave/valor do fjall para valores grandes; evitar escritas duplicadas de valores grandes.
-2. Protocolo TCP: operação de varredura por intervalo; transferência de valores grandes mais
-   rápida (buffers de socket, menos cópias, respostas em streaming).
+Mudanças integradas:
+
+- **Motor:** liberar um objeto remove só as linhas do objeto e do refcount, sem ler o corpo
+  (ids obsoletos na lista de candidatos de dedupe são tolerados e varridos pelo `gc`); ids de
+  objetos alocados uma vez por transação; refcount de objeto novo escrito sem leitura;
+  `inline_max` padrão 1 KiB → 16 KiB (bancos existentes mantêm o seu).
+- **Protocolo:** operação `SCAN_RANGE` (intervalo de chaves com limite, ordem reversa e
+  paginação); buffer de recepção de 4 MiB nos sockets (Windows), valores ≥ 4 KiB escritos
+  direto dos seus buffers (escrita vetorizada) e lidos direto no destino.
+- **fjall:** separação chave/valor (valores ≥ 1 KiB em blob files, padrão de
+  `FjallOptions::for_wal`); `compact` recolhe todo o lixo dos blobs.
+- **Vigia de compactação:** o fjall 3.1.10 pausa os commits com 30 execuções no nível 0 e só
+  agenda compactações depois de descarregar memtables; com os commits pausados, nada mais
+  agendava compactação e os escritores dormiam para sempre (reproduzido: 16–64 escritores de
+  valores de 1 MiB sem separação, 0% de CPU). Uma thread agora compacta todo keyspace com 20+
+  execuções no nível 0 (detalhes em `src/store/fjall.rs`, *Compaction watchdog*).
+
+Condições: a primeira bateria desta rodada foi descartada, porque o emulador MEmu e o Spotify
+consumiam ~9 núcleos durante as medições (o `get` embarcado do fjall mediu 49 k/s em vez de
+~200 k/s). Um A/B com a máquina quieta (binário da rodada 4 × atual × atual sem separação
+chave/valor, alternados, 2 vezes cada) não mostrou regressão do fjall em valores pequenos. A
+bateria abaixo foi repetida com a máquina quieta; 1 repetição por carga; saídas em
+`bench-results/compare-r5-*.txt`.
+
+### Placar (babeldb via TCP vs o melhor entre PostgreSQL e MongoDB)
+
+| carga | rodada 4 | rodada 5 | onde ainda perde |
+|---|---|---|---|
+| chat 100 k × 512 B, durável | 26 de 31 | **28 de 31** | update 1 cliente (0,91), update 16 clientes (0,98), delete 16 clientes (0,86) |
+| chat, relaxado | 28 de 31 | **28 de 31** | put 1 cliente (0,74–0,81 do PG); delete 64 clientes empata |
+| 50 k × 4 KiB (texto) | 23 de 31 | **29 de 31** | delete 4 e 16 clientes (0,89–0,92 do PG) |
+| 10 k × 64 KiB (incompressível) | 17 de 31 | **26 de 31** | put 4/16 clientes (0,85–0,87), update concorrente (0,73–0,87 do PG) |
+| 2 k × 1 MiB (texto) | 10 de 25 (+2 empates) | **17 de 25 (+2 empates)** | put (0,64–0,77 do Mongo), update 16 clientes (0,78), delete 16 clientes (0,51) |
+| 2 k × 1 MiB (incompressível) | 2 de 25 | **8 de 25 (+2 empates)** | put, latest, range, misturas, update (0,62–0,98), delete 16 clientes (0,28 do Mongo) |
+
+Total: 106 → **136 de 170 fases** vencidas.
+
+### Valores grandes: babeldb fjall+WAL via TCP, rodada 4 → rodada 5 (ops/s)
+
+| carga e operação | rodada 4 | rodada 5 | PostgreSQL | MongoDB |
+|---|---|---|---|---|
+| 4 KiB, update 16 clientes | 10 844 | **18 088** | 10 768 | 5 969 |
+| 4 KiB, put 16 clientes | 21 023 | **33 449** | 14 574 | 5 992 |
+| 64 KiB, delete 16 clientes | 1 992 | **13 877** | 3 340 | 3 418 |
+| 64 KiB, get 1 cliente | 3 134 | **5 135** | 2 786 | 2 519 |
+| 64 KiB, últimas 50 | 88 | **239** | 161 | 150 |
+| 1 MiB texto, get 1 cliente | 90 | **165** | 124 | 134 |
+| 1 MiB texto, delete 16 clientes | 238 | 815 | 509 | **1 607** |
+| 1 MiB incompr., update 16 clientes | 24 | 76 | 40 | **120** |
+| 1 MiB incompr., delete 16 clientes | 34 | 488 | 117 | **1 732** |
+
+Espaço dos dados (MB): chat 29,2 (PG 62,6, Mongo 32,1); 4 KiB 91,2 (144,3 / 124,1); 64 KiB
+662,8 (684,7 / 696,8); 1 MiB texto 853 (957 / 1 107); 1 MiB incompressível 2 121,7 — acima do
+Mongo (2 111,8) por 0,5%: o envelope de 64 B por bloco de 16 KiB custa 0,4%.
+
+### Pontos a investigar
+
+- Update e delete de valores pequenos via TCP mediram 0,59–0,78 da rodada 4 (ex.: update 16
+  clientes 33 719 → 19 844/s), enquanto put, get e misturas ficaram iguais ou melhores; o PG
+  variou ±20–30% entre as duas rodadas. Ainda não se sabe se é regressão ou ruído: precisa de
+  A/B repetido.
+- Modo relaxado: put com 1 cliente 8 777 → 6 600/s e latest 1 cliente 5 819 → 3 738/s.
+
+## Rodada 6 (planejada)
+
+1. A/B repetido de update/delete de valores pequenos e de operações de 1 cliente (rodada 4 ×
+   rodada 5); corrigir a regressão se ela se confirmar.
+2. Valores de 1 MiB: delete e update concorrentes (Mongo 2–3,5× à frente), put com 1–16 clientes.
+3. Valores de 64 KiB: put e update concorrentes.
+4. Espaço de valores grandes incompressíveis: blocos maiores ou envelope compacto.
