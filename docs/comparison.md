@@ -123,11 +123,55 @@ harness já reporta dados e WAL separados).
   clientes (9,3 k e 15,3 k vs 9,8 k e 25,2 k do PG), escrita concorrente com codec adaptive
   (a codificação ainda roda na thread única do committer), espaço **sem** compactação.
 
-## Rodada 3 (planejada)
+## Rodada 3 (28/09/2026)
 
-1. Codificar os valores nas threads de quem escreve (TCP workers / threads da aplicação), não
-   na thread do group committer; usar `put_many` no motor; acelerar a carga em lote.
-2. Perfilar o caminho de escrita concorrente do servidor TCP (16 clientes: 15 k/s vs 30 k/s
-   embarcado).
-3. Espaço sem compactação manual: envelope inline compacto (os 64 B por registro pesam em
-   mensagens de ~185 B comprimidas) e compactação/reescrita incremental.
+Mudanças integradas: valores pré-codificados nas threads de quem escreve (`Db::prepare`,
+`write_prepared_each`, group commit com preparo no chamador), carga em lote com pipeline e
+`put_many`/`get_many`; backend **fjall (LSM) + WAL** (`Db::open_fjall_wal`, blocos LZ4);
+prioridade elevada da thread de commit no servidor TCP. Mesmas condições (100 000 × 512 B,
+durabilidade equivalente, 1 repetição; o PostgreSQL também rendeu mais nesta execução do que
+na rodada 2). Saída bruta: `bench-results/compare-round3.txt`. Espaço: só arquivos de dados
+(WAL do babeldb, journal do fjall, WAL do PG e journal do Mongo excluídos).
+
+### Comparação justa (localhost TCP) — ops/s
+
+| operação | babeldb fjall+WAL | babeldb fjall+WAL+dict | babeldb redb+WAL raw | PostgreSQL | MongoDB |
+|---|---|---|---|---|---|
+| carga em lote (registros/s) | **147 000** | 138 000 | 81 000 | 121 000 | 78 000 |
+| put durável, 1 cliente | 4 405 | **4 748** | 3 627 | 4 250 | 640 |
+| put durável, 4 clientes | 12 681 | **13 005** | 10 590 | 11 715 | 1 479 |
+| put durável, 16 clientes | 26 626 | 23 990 | 22 584 | **29 537** | 6 114 |
+| put durável, 64 clientes | 29 642 | 29 739 | **35 975** | 35 480 | 16 404 |
+| get, 1 cliente | 14 996 | 16 411 | 16 562 (dict redb 18 621) | 9 415 | 4 085 |
+| get, 16 clientes | 145 697 | 142 923 | 133 382 (dict redb **150 819**) | 79 883 | 25 209 |
+| últimas 50, 1 cliente | 5 667 | 5 590 | 7 055 (adaptive redb **7 693**) | 4 174 | 1 498 |
+| últimas 50, 16 clientes | 65 880 | 56 748 | 62 977 (dict redb **78 766**) | 31 474 | 10 832 |
+| espaço dos dados, recém-carregado | 29,0 MB | **25,8 MB** | 134,7 MB | 62,6 MB | 32,1 MB |
+
+### Embarcado (dentro do processo) — destaques
+
+| operação | fjall+WAL | redb+WAL (adaptive) |
+|---|---|---|
+| carga em lote (registros/s) | 191 000 | 132 000 |
+| put durável, 1 / 16 / 64 threads | 6 661 / 48 094 / **99 726** | 5 138 / 30 206 / 51 701 |
+| get, 16 threads | 1 848 587 | **3 146 287** |
+| últimas 50, 16 threads | 157 476 | **347 873** |
+
+### Placar após a rodada 3
+
+- Uma única configuração (**fjall + WAL, via TCP**) vence o PostgreSQL e o MongoDB em 10 de 12
+  métricas: carga em lote, put durável com 1 e 4 clientes, todas as leituras (1,6–2,1× o PG),
+  "últimas 50" e espaço sem compactação manual (29 MB vs 32 MB do Mongo e 63 MB do PG).
+- **Perde**: put durável via TCP com 16 clientes (26,6 k vs 29,5 k do PG) e com 64 clientes
+  (29,6 k vs 35,5 k; o redb+WAL raw empata: 36,0 k).
+- Embarcado, vence tudo: até 99,7 k escritas duráveis/s e 3,1 M leituras/s.
+- O placar vale para esta carga (mensagens de chat de 512 B, chave → valor, "últimas N"). O
+  PostgreSQL e o MongoDB seguem tendo SQL/consultas, índices secundários e replicação.
+
+## Rodada 4 (planejada)
+
+1. Escrita concorrente via TCP com 16–64 clientes (gargalos medidos: custo por waiter
+   notificado, clientes alternando em dois grupos, preempção da thread de commit).
+2. Amplitude: atualizações, exclusões, varreduras por intervalo, misturas 95/5 e 50/50,
+   valores grandes (4 KiB–1 MiB), modo relaxado e dados maiores que a RAM — para saber onde
+   mais o babeldb perde.

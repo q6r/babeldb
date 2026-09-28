@@ -1,0 +1,268 @@
+   Compiling const-random-macro v0.1.16
+   Compiling enum_dispatch v0.3.13
+   Compiling crossbeam-skiplist v0.1.3
+   Compiling dashmap v6.2.1
+   Compiling const-random v0.1.18
+   Compiling macro_magic_core v0.5.1
+   Compiling lsm-tree v3.1.10
+   Compiling macro_magic_macros v0.5.1
+   Compiling macro_magic v0.5.1
+   Compiling mongodb-internal-macros v3.9.1
+   Compiling mongodb v3.9.1
+   Compiling fjall v3.1.10
+   Compiling babeldb v0.1.0 (C:\Users\v4mpt\babeldb)
+    Finished `bench` profile [optimized + debuginfo] target(s) in 1m 45s
+     Running benches\compare.rs (target\release\deps\compare-67fa4b9623438596.exe)
+== babel-wal-tcp-raw (100000 records x 512 B, durable)
+[babel-wal-tcp-raw] load       100000 records in 1.24s of batches -> 80800 rec/s
+[babel-wal-tcp-raw] load-batch x1       100 ops           81 ops/s  p50    7.92ms p95   25.95ms p99  114.43ms max  161.76ms
+[babel-wal-tcp-raw] space          134.75 MB  (redb file allocated: data files allocated, WAL file excluded (+16.78 MB WAL; engine payload 61.30 MB))
+[babel-wal-tcp-raw] space-compacted      69.62 MB  (data files after Db::compact in 2.60s: min(apparent, allocated), WAL file excluded (+16.78 MB WAL; engine payload 61.30 MB))
+[babel-wal-tcp-raw] put        x1       300 ops         3627 ops/s  p50   259.1us p95   375.0us p99   645.2us max    1.66ms
+[babel-wal-tcp-raw] put-mt     x1       200 ops         3923 ops/s  p50   247.3us p95   331.9us p99   375.6us max   864.3us
+[babel-wal-tcp-raw] put-mt     x4       800 ops        10590 ops/s  p50   361.6us p95   491.3us p99   578.5us max   677.8us
+[babel-wal-tcp-raw] put-mt     x16     3200 ops        22584 ops/s  p50   672.3us p95    1.02ms p99    1.36ms max    1.67ms
+[babel-wal-tcp-raw] put-mt     x64    12800 ops        35975 ops/s  p50    1.71ms p95    2.45ms p99    2.77ms max    3.14ms
+[babel-wal-tcp-raw] get        x1     20000 ops        16562 ops/s  p50    54.5us p95    95.6us p99   123.1us max   21.90ms
+[babel-wal-tcp-raw] get-mt     x4     40000 ops        70152 ops/s  p50    52.8us p95    80.6us p99   105.7us max   694.7us
+[babel-wal-tcp-raw] get-mt     x16   160000 ops       133382 ops/s  p50    68.4us p95   130.2us p99   196.0us max   73.89ms
+[babel-wal-tcp-raw] latest     x1      5000 ops         7055 ops/s  p50   130.4us p95   218.3us p99   327.4us max    1.06ms
+[babel-wal-tcp-raw] latest-mt  x4     10000 ops        30366 ops/s  p50   124.8us p95   169.6us p99   204.9us max   804.7us
+[babel-wal-tcp-raw] latest-mt  x16    40000 ops        62977 ops/s  p50   166.9us p95   317.5us p99   483.0us max   37.87ms
+== babel-wal-tcp (100000 records x 512 B, durable)
+[babel-wal-tcp] load       100000 records in 1.03s of batches -> 97326 rec/s
+[babel-wal-tcp] load-batch x1       100 ops           97 ops/s  p50    8.29ms p95   19.20ms p99   22.36ms max   85.32ms
+[babel-wal-tcp] space           67.38 MB  (redb file allocated: data files allocated, WAL file excluded (+16.78 MB WAL; engine payload 31.38 MB))
+[babel-wal-tcp] space-compacted      34.41 MB  (data files after Db::compact in 0.86s: min(apparent, allocated), WAL file excluded (+16.78 MB WAL; engine payload 31.38 MB))
+[babel-wal-tcp] put        x1       300 ops         3499 ops/s  p50   263.3us p95   407.0us p99   528.7us max    1.99ms
+[babel-wal-tcp] put-mt     x1       200 ops         3707 ops/s  p50   257.9us p95   370.4us p99   430.4us max   590.8us
+[babel-wal-tcp] put-mt     x4       800 ops         9097 ops/s  p50   412.7us p95   619.1us p99   706.9us max    1.50ms
+[babel-wal-tcp] put-mt     x16     3200 ops        19561 ops/s  p50   763.8us p95    1.21ms p99    1.44ms max    1.92ms
+[babel-wal-tcp] put-mt     x64    12800 ops        22366 ops/s  p50    2.79ms p95    4.03ms p99    4.72ms max    6.01ms
+[babel-wal-tcp] get        x1     20000 ops        17141 ops/s  p50    55.3us p95    84.0us p99    99.1us max    2.92ms
+[babel-wal-tcp] get-mt     x4     40000 ops        63330 ops/s  p50    60.3us p95    81.4us p99   105.4us max    5.19ms
+[babel-wal-tcp] get-mt     x16   160000 ops       143506 ops/s  p50    75.2us p95   145.5us p99   223.8us max   51.89ms
+[babel-wal-tcp] latest     x1      5000 ops         7693 ops/s  p50   116.9us p95   208.4us p99   281.9us max   794.9us
+[babel-wal-tcp] latest-mt  x4     10000 ops        34553 ops/s  p50   108.4us p95   161.0us p99   210.2us max   640.5us
+[babel-wal-tcp] latest-mt  x16    40000 ops        77475 ops/s  p50   148.9us p95   265.6us p99   407.7us max   22.63ms
+== babel-wal-tcp-dict (100000 records x 512 B, durable)
+[babel-wal-tcp-dict] dict       65536 B zstd dictionary from 1600 samples in 0.11s (validation 146142 -> 73324 B, installed: true)
+[babel-wal-tcp-dict] load       100000 records in 0.94s of batches -> 106337 rec/s
+[babel-wal-tcp-dict] load-batch x1       100 ops          106 ops/s  p50    7.82ms p95   17.44ms p99   20.76ms max   91.02ms
+[babel-wal-tcp-dict] space           67.38 MB  (redb file allocated: data files allocated, WAL file excluded (+16.78 MB WAL; engine payload 28.81 MB))
+[babel-wal-tcp-dict] space-compacted      31.45 MB  (data files after Db::compact in 0.82s: min(apparent, allocated), WAL file excluded (+16.78 MB WAL; engine payload 28.81 MB))
+[babel-wal-tcp-dict] put        x1       300 ops         3927 ops/s  p50   238.8us p95   347.1us p99   451.2us max    1.63ms
+[babel-wal-tcp-dict] put-mt     x1       200 ops         3970 ops/s  p50   238.5us p95   335.5us p99   377.6us max   447.2us
+[babel-wal-tcp-dict] put-mt     x4       800 ops         9242 ops/s  p50   406.9us p95   607.2us p99   859.4us max    1.62ms
+[babel-wal-tcp-dict] put-mt     x16     3200 ops        13305 ops/s  p50    1.07ms p95    2.18ms p99    3.11ms max    5.08ms
+[babel-wal-tcp-dict] put-mt     x64    12800 ops        24063 ops/s  p50    2.51ms p95    3.63ms p99    4.92ms max    7.97ms
+[babel-wal-tcp-dict] get        x1     20000 ops        18621 ops/s  p50    50.1us p95    78.7us p99    99.1us max    3.44ms
+[babel-wal-tcp-dict] get-mt     x4     40000 ops        65030 ops/s  p50    58.8us p95    79.6us p99    95.5us max    5.53ms
+[babel-wal-tcp-dict] get-mt     x16   160000 ops       150819 ops/s  p50    71.3us p95   137.5us p99   276.1us max   56.41ms
+[babel-wal-tcp-dict] latest     x1      5000 ops         7357 ops/s  p50   122.4us p95   226.0us p99   306.7us max   621.2us
+[babel-wal-tcp-dict] latest-mt  x4     10000 ops        30171 ops/s  p50   120.6us p95   178.8us p99   239.2us max    1.48ms
+[babel-wal-tcp-dict] latest-mt  x16    40000 ops        78766 ops/s  p50   153.6us p95   270.1us p99   407.5us max   13.17ms
+== babel-fjall-wal-tcp (100000 records x 512 B, durable)
+[babel-fjall-wal-tcp] fjall      FjallOptions { layout: SingleKeyspace, compression: Lz4, data_block_bytes: 4096, memtable_bytes: 67108864, expect_point_read_hits: false, pin_index_and_filters: true, data_block_hash_percent: 0, data_block_restart_interval: 0, deferred: JournalBuffer }
+[babel-fjall-wal-tcp] load       100000 records in 0.68s of batches -> 146677 rec/s
+[babel-fjall-wal-tcp] load-batch x1       100 ops          147 ops/s  p50    6.24ms p95    9.53ms p99   16.58ms max   17.10ms
+[babel-fjall-wal-tcp] space           29.03 MB  (fjall tables after a memtable flush (its checkpoint) in 0.14s: data files allocated, WAL file and fjall journal excluded (+16.78 MB WAL, +67.11 MB journal; engine payload 31.92 MB))
+[babel-fjall-wal-tcp] space-compacted      28.87 MB  (data files after Db::compact in 0.19s: min(apparent, allocated), WAL file and fjall journal excluded (+16.78 MB WAL, +67.11 MB journal; engine payload 31.92 MB))
+[babel-fjall-wal-tcp] put        x1       300 ops         4405 ops/s  p50   215.6us p95   313.4us p99   403.5us max   612.4us
+[babel-fjall-wal-tcp] put-mt     x1       200 ops         4047 ops/s  p50   238.9us p95   321.3us p99   458.5us max   649.5us
+[babel-fjall-wal-tcp] put-mt     x4       800 ops        12681 ops/s  p50   304.4us p95   426.0us p99   498.4us max   599.6us
+[babel-fjall-wal-tcp] put-mt     x16     3200 ops        26626 ops/s  p50   569.8us p95   816.5us p99   967.8us max    1.06ms
+[babel-fjall-wal-tcp] put-mt     x64    12800 ops        29642 ops/s  p50    2.01ms p95    3.63ms p99    4.98ms max    6.81ms
+[babel-fjall-wal-tcp] get        x1     20000 ops        14996 ops/s  p50    63.4us p95    95.3us p99   123.3us max   980.5us
+[babel-fjall-wal-tcp] get-mt     x4     40000 ops        57661 ops/s  p50    66.6us p95    89.9us p99   115.1us max    1.07ms
+[babel-fjall-wal-tcp] get-mt     x16   160000 ops       145697 ops/s  p50    83.3us p95   147.7us p99   222.3us max   31.36ms
+[babel-fjall-wal-tcp] latest     x1      5000 ops         5667 ops/s  p50   160.6us p95   279.4us p99   398.2us max   786.9us
+[babel-fjall-wal-tcp] latest-mt  x4     10000 ops        24899 ops/s  p50   149.9us p95   234.6us p99   308.8us max    2.13ms
+[babel-fjall-wal-tcp] latest-mt  x16    40000 ops        65880 ops/s  p50   191.9us p95   350.4us p99   543.9us max    9.31ms
+== babel-fjall-wal-tcp-dict (100000 records x 512 B, durable)
+[babel-fjall-wal-tcp-dict] fjall      FjallOptions { layout: SingleKeyspace, compression: Lz4, data_block_bytes: 4096, memtable_bytes: 67108864, expect_point_read_hits: false, pin_index_and_filters: true, data_block_hash_percent: 0, data_block_restart_interval: 0, deferred: JournalBuffer }
+[babel-fjall-wal-tcp-dict] dict       65536 B zstd dictionary from 1600 samples in 0.11s (validation 146142 -> 73324 B, installed: true)
+[babel-fjall-wal-tcp-dict] load       100000 records in 0.72s of batches -> 138339 rec/s
+[babel-fjall-wal-tcp-dict] load-batch x1       100 ops          138 ops/s  p50    6.48ms p95   16.39ms p99   18.54ms max   23.07ms
+[babel-fjall-wal-tcp-dict] space           25.79 MB  (fjall tables after a memtable flush (its checkpoint) in 0.14s: data files allocated, WAL file and fjall journal excluded (+16.78 MB WAL, +67.11 MB journal; engine payload 28.81 MB))
+[babel-fjall-wal-tcp-dict] space-compacted      25.63 MB  (data files after Db::compact in 0.20s: min(apparent, allocated), WAL file and fjall journal excluded (+16.78 MB WAL, +67.11 MB journal; engine payload 28.81 MB))
+[babel-fjall-wal-tcp-dict] put        x1       300 ops         4748 ops/s  p50   202.4us p95   271.9us p99   349.3us max   871.7us
+[babel-fjall-wal-tcp-dict] put-mt     x1       200 ops         4744 ops/s  p50   206.9us p95   268.1us p99   298.5us max   309.2us
+[babel-fjall-wal-tcp-dict] put-mt     x4       800 ops        13005 ops/s  p50   295.1us p95   393.4us p99   503.6us max   648.8us
+[babel-fjall-wal-tcp-dict] put-mt     x16     3200 ops        23990 ops/s  p50   621.4us p95   957.0us p99    1.18ms max    1.35ms
+[babel-fjall-wal-tcp-dict] put-mt     x64    12800 ops        29739 ops/s  p50    2.08ms p95    3.14ms p99    3.53ms max    4.22ms
+[babel-fjall-wal-tcp-dict] get        x1     20000 ops        16411 ops/s  p50    57.7us p95    87.2us p99   102.7us max   724.1us
+[babel-fjall-wal-tcp-dict] get-mt     x4     40000 ops        57628 ops/s  p50    66.8us p95    89.3us p99   110.5us max    2.02ms
+[babel-fjall-wal-tcp-dict] get-mt     x16   160000 ops       142923 ops/s  p50    74.7us p95   137.2us p99   214.3us max   48.88ms
+[babel-fjall-wal-tcp-dict] latest     x1      5000 ops         5590 ops/s  p50   164.9us p95   279.7us p99   361.1us max   726.4us
+[babel-fjall-wal-tcp-dict] latest-mt  x4     10000 ops        23550 ops/s  p50   159.8us p95   237.8us p99   312.3us max    1.06ms
+[babel-fjall-wal-tcp-dict] latest-mt  x16    40000 ops        56748 ops/s  p50   216.2us p95   392.0us p99   560.1us max   27.19ms
+== babel-wal-raw (100000 records x 512 B, durable)
+[babel-wal-raw] load       100000 records in 1.11s of batches -> 89743 rec/s
+[babel-wal-raw] load-batch x1       100 ops           90 ops/s  p50    7.20ms p95   15.45ms p99  113.07ms max  141.34ms
+[babel-wal-raw] space          134.75 MB  (redb file allocated: data files allocated, WAL file excluded (+16.78 MB WAL; engine payload 61.30 MB))
+[babel-wal-raw] space-compacted      69.62 MB  (data files after Db::compact in 2.65s: min(apparent, allocated), WAL file excluded (+16.78 MB WAL; engine payload 61.30 MB))
+[babel-wal-raw] put        x1       300 ops         5478 ops/s  p50   167.3us p95   245.9us p99   331.4us max    1.67ms
+[babel-wal-raw] put-mt     x1       200 ops         5767 ops/s  p50   166.7us p95   239.2us p99   285.7us max   312.7us
+[babel-wal-raw] put-mt     x4       800 ops        12672 ops/s  p50   301.3us p95   424.8us p99   545.3us max    1.01ms
+[babel-wal-raw] put-mt     x16     3200 ops        34664 ops/s  p50   451.5us p95   745.6us p99    1.07ms max    1.65ms
+[babel-wal-raw] put-mt     x64    12800 ops        56886 ops/s  p50   992.6us p95    1.88ms p99    2.80ms max    4.24ms
+[babel-wal-raw] get        x1     20000 ops       138174 ops/s  p50     2.2us p95    19.1us p99    30.1us max   23.87ms
+[babel-wal-raw] get-mt     x4     40000 ops       992248 ops/s  p50     1.7us p95    11.7us p99    33.0us max   773.7us
+[babel-wal-raw] get-mt     x16   160000 ops      2238417 ops/s  p50     1.9us p95    20.5us p99    94.7us max    2.21ms
+[babel-wal-raw] latest     x1      5000 ops        20329 ops/s  p50    45.3us p95    85.9us p99   152.0us max   317.5us
+[babel-wal-raw] latest-mt  x4     10000 ops        87804 ops/s  p50    41.5us p95    62.5us p99    85.0us max   443.2us
+[babel-wal-raw] latest-mt  x16    40000 ops       238300 ops/s  p50    43.1us p95    80.1us p99   233.5us max   35.22ms
+== babel-wal (100000 records x 512 B, durable)
+[babel-wal] load       100000 records in 0.76s of batches -> 132145 rec/s
+[babel-wal] load-batch x1       100 ops          132 ops/s  p50    6.45ms p95    8.44ms p99   20.00ms max   86.77ms
+[babel-wal] space           67.38 MB  (redb file allocated: data files allocated, WAL file excluded (+16.78 MB WAL; engine payload 31.74 MB))
+[babel-wal] space-compacted      34.83 MB  (data files after Db::compact in 0.98s: min(apparent, allocated), WAL file excluded (+16.78 MB WAL; engine payload 31.74 MB))
+[babel-wal] put        x1       300 ops         5138 ops/s  p50   180.2us p95   252.2us p99   311.2us max    1.53ms
+[babel-wal] put-mt     x1       200 ops         5315 ops/s  p50   179.6us p95   252.2us p99   275.5us max   435.1us
+[babel-wal] put-mt     x4       800 ops        13322 ops/s  p50   290.4us p95   398.8us p99   473.5us max   653.7us
+[babel-wal] put-mt     x16     3200 ops        30206 ops/s  p50   489.4us p95   722.1us p99    1.16ms max    2.16ms
+[babel-wal] put-mt     x64    12800 ops        51701 ops/s  p50    1.20ms p95    2.06ms p99    2.68ms max    3.05ms
+[babel-wal] get        x1     20000 ops       182565 ops/s  p50     4.5us p95     7.6us p99    15.7us max    1.47ms
+[babel-wal] get-mt     x4     40000 ops      1019646 ops/s  p50     3.4us p95     5.7us p99     7.8us max   234.0us
+[babel-wal] get-mt     x16   160000 ops      3146287 ops/s  p50     3.4us p95     5.3us p99    10.7us max    4.86ms
+[babel-wal] latest     x1      5000 ops        23507 ops/s  p50    33.4us p95   106.5us p99   166.3us max   332.4us
+[babel-wal] latest-mt  x4     10000 ops       130021 ops/s  p50    22.3us p95    55.6us p99    96.3us max    1.30ms
+[babel-wal] latest-mt  x16    40000 ops       347873 ops/s  p50    22.7us p95    54.5us p99   136.8us max   17.13ms
+== babel-wal-dict (100000 records x 512 B, durable)
+[babel-wal-dict] dict       65536 B zstd dictionary from 1600 samples in 0.11s (validation 146142 -> 73324 B, installed: true)
+[babel-wal-dict] load       100000 records in 0.72s of batches -> 139018 rec/s
+[babel-wal-dict] load-batch x1       100 ops          139 ops/s  p50    6.28ms p95    8.05ms p99   10.02ms max   92.56ms
+[babel-wal-dict] space           67.38 MB  (redb file allocated: data files allocated, WAL file excluded (+16.78 MB WAL; engine payload 28.81 MB))
+[babel-wal-dict] space-compacted      31.45 MB  (data files after Db::compact in 0.80s: min(apparent, allocated), WAL file excluded (+16.78 MB WAL; engine payload 28.81 MB))
+[babel-wal-dict] put        x1       300 ops         5147 ops/s  p50   183.2us p95   241.0us p99   337.0us max    1.87ms
+[babel-wal-dict] put-mt     x1       200 ops         5404 ops/s  p50   181.3us p95   233.6us p99   286.1us max   491.2us
+[babel-wal-dict] put-mt     x4       800 ops        13206 ops/s  p50   292.5us p95   408.7us p99   448.9us max   499.8us
+[babel-wal-dict] put-mt     x16     3200 ops        31917 ops/s  p50   474.6us p95   699.7us p99   950.7us max    1.26ms
+[babel-wal-dict] put-mt     x64    12800 ops        56957 ops/s  p50    1.11ms p95    1.85ms p99    2.47ms max    2.80ms
+[babel-wal-dict] get        x1     20000 ops       304753 ops/s  p50     2.9us p95     4.8us p99     6.2us max   151.2us
+[babel-wal-dict] get-mt     x4     40000 ops      1094670 ops/s  p50     3.1us p95     5.2us p99     7.6us max   168.9us
+[babel-wal-dict] get-mt     x16   160000 ops      3356493 ops/s  p50     3.3us p95     4.9us p99     9.5us max    5.28ms
+[babel-wal-dict] latest     x1      5000 ops        22365 ops/s  p50    34.7us p95   109.5us p99   168.4us max   374.3us
+[babel-wal-dict] latest-mt  x4     10000 ops       115072 ops/s  p50    26.9us p95    68.8us p99   110.0us max    1.07ms
+[babel-wal-dict] latest-mt  x16    40000 ops       329844 ops/s  p50    22.7us p95    55.8us p99   150.3us max   29.06ms
+== babel-fjall-wal-raw (100000 records x 512 B, durable)
+[babel-fjall-wal-raw] fjall      FjallOptions { layout: SingleKeyspace, compression: Lz4, data_block_bytes: 4096, memtable_bytes: 67108864, expect_point_read_hits: false, pin_index_and_filters: true, data_block_hash_percent: 0, data_block_restart_interval: 0, deferred: JournalBuffer }
+[babel-fjall-wal-raw] load       100000 records in 0.54s of batches -> 184661 rec/s
+[babel-fjall-wal-raw] load-batch x1       100 ops          185 ops/s  p50    5.00ms p95    7.83ms p99   13.80ms max   14.88ms
+[babel-fjall-wal-raw] space           38.64 MB  (fjall tables after a memtable flush (its checkpoint) in 0.26s: data files allocated, WAL file and fjall journal excluded (+16.78 MB WAL, +67.11 MB journal; engine payload 61.30 MB))
+[babel-fjall-wal-raw] space-compacted      38.52 MB  (data files after Db::compact in 0.34s: min(apparent, allocated), WAL file and fjall journal excluded (+16.78 MB WAL, +67.11 MB journal; engine payload 61.30 MB))
+[babel-fjall-wal-raw] put        x1       300 ops         8364 ops/s  p50   114.0us p95   168.3us p99   218.6us max   379.3us
+[babel-fjall-wal-raw] put-mt     x1       200 ops         8293 ops/s  p50   115.2us p95   158.0us p99   210.4us max   377.3us
+[babel-fjall-wal-raw] put-mt     x4       800 ops        18731 ops/s  p50   206.5us p95   269.8us p99   351.7us max   500.1us
+[babel-fjall-wal-raw] put-mt     x16     3200 ops        56697 ops/s  p50   247.8us p95   427.4us p99   513.2us max   699.2us
+[babel-fjall-wal-raw] put-mt     x64    12800 ops        97330 ops/s  p50   576.8us p95    1.10ms p99    1.44ms max    2.17ms
+[babel-fjall-wal-raw] get        x1     20000 ops       105251 ops/s  p50     8.7us p95    21.1us p99    33.3us max   690.9us
+[babel-fjall-wal-raw] get-mt     x4     40000 ops       549552 ops/s  p50     3.7us p95    25.3us p99    63.6us max   315.0us
+[babel-fjall-wal-raw] get-mt     x16   160000 ops      2362670 ops/s  p50     3.8us p95     5.3us p99    25.2us max    4.49ms
+[babel-fjall-wal-raw] latest     x1      5000 ops        13258 ops/s  p50    72.5us p95   117.6us p99   161.3us max   306.9us
+[babel-fjall-wal-raw] latest-mt  x4     10000 ops        51766 ops/s  p50    73.2us p95   112.7us p99   144.1us max   334.4us
+[babel-fjall-wal-raw] latest-mt  x16    40000 ops       132121 ops/s  p50    85.7us p95   150.2us p99   408.9us max   22.90ms
+== babel-fjall-wal (100000 records x 512 B, durable)
+[babel-fjall-wal] fjall      FjallOptions { layout: SingleKeyspace, compression: Lz4, data_block_bytes: 4096, memtable_bytes: 67108864, expect_point_read_hits: false, pin_index_and_filters: true, data_block_hash_percent: 0, data_block_restart_interval: 0, deferred: JournalBuffer }
+[babel-fjall-wal] load       100000 records in 0.52s of batches -> 191405 rec/s
+[babel-fjall-wal] load-batch x1       100 ops          191 ops/s  p50    5.05ms p95    6.72ms p99    7.16ms max   13.34ms
+[babel-fjall-wal] space           29.58 MB  (fjall tables after a memtable flush (its checkpoint) in 0.14s: data files allocated, WAL file and fjall journal excluded (+16.78 MB WAL, +67.11 MB journal; engine payload 32.46 MB))
+[babel-fjall-wal] space-compacted      29.43 MB  (data files after Db::compact in 0.19s: min(apparent, allocated), WAL file and fjall journal excluded (+16.78 MB WAL, +67.11 MB journal; engine payload 32.46 MB))
+[babel-fjall-wal] put        x1       300 ops         6661 ops/s  p50   142.7us p95   211.2us p99   295.8us max   423.4us
+[babel-fjall-wal] put-mt     x1       200 ops         6735 ops/s  p50   141.6us p95   194.9us p99   246.2us max   458.5us
+[babel-fjall-wal] put-mt     x4       800 ops        18394 ops/s  p50   206.6us p95   289.5us p99   339.3us max    1.23ms
+[babel-fjall-wal] put-mt     x16     3200 ops        48094 ops/s  p50   318.6us p95   432.8us p99   597.6us max    1.13ms
+[babel-fjall-wal] put-mt     x64    12800 ops        99726 ops/s  p50   606.0us p95    1.08ms p99    1.33ms max    2.15ms
+[babel-fjall-wal] get        x1     20000 ops       160947 ops/s  p50     5.3us p95     9.7us p99    17.8us max   630.2us
+[babel-fjall-wal] get-mt     x4     40000 ops       624203 ops/s  p50     5.5us p95     9.1us p99    12.5us max   218.4us
+[babel-fjall-wal] get-mt     x16   160000 ops      1848587 ops/s  p50     5.8us p95     8.5us p99    18.2us max   12.89ms
+[babel-fjall-wal] latest     x1      5000 ops        12996 ops/s  p50    66.6us p95   147.1us p99   210.2us max   379.0us
+[babel-fjall-wal] latest-mt  x4     10000 ops        60439 ops/s  p50    59.3us p95   108.6us p99   162.2us max   696.4us
+[babel-fjall-wal] latest-mt  x16    40000 ops       157476 ops/s  p50    70.6us p95   117.3us p99   323.4us max   22.50ms
+== babel-fjall-wal-dict (100000 records x 512 B, durable)
+[babel-fjall-wal-dict] fjall      FjallOptions { layout: SingleKeyspace, compression: Lz4, data_block_bytes: 4096, memtable_bytes: 67108864, expect_point_read_hits: false, pin_index_and_filters: true, data_block_hash_percent: 0, data_block_restart_interval: 0, deferred: JournalBuffer }
+[babel-fjall-wal-dict] dict       65536 B zstd dictionary from 1600 samples in 0.14s (validation 146142 -> 73324 B, installed: true)
+[babel-fjall-wal-dict] load       100000 records in 0.54s of batches -> 183645 rec/s
+[babel-fjall-wal-dict] load-batch x1       100 ops          184 ops/s  p50    5.26ms p95    6.61ms p99    7.01ms max   15.57ms
+[babel-fjall-wal-dict] space           25.79 MB  (fjall tables after a memtable flush (its checkpoint) in 0.13s: data files allocated, WAL file and fjall journal excluded (+16.78 MB WAL, +67.11 MB journal; engine payload 28.81 MB))
+[babel-fjall-wal-dict] space-compacted      25.63 MB  (data files after Db::compact in 0.18s: min(apparent, allocated), WAL file and fjall journal excluded (+16.78 MB WAL, +67.11 MB journal; engine payload 28.81 MB))
+[babel-fjall-wal-dict] put        x1       300 ops         6422 ops/s  p50   147.2us p95   216.7us p99   254.8us max   533.8us
+[babel-fjall-wal-dict] put-mt     x1       200 ops         6428 ops/s  p50   148.3us p95   216.2us p99   247.2us max   288.0us
+[babel-fjall-wal-dict] put-mt     x4       800 ops        18207 ops/s  p50   215.7us p95   289.1us p99   312.2us max   324.2us
+[babel-fjall-wal-dict] put-mt     x16     3200 ops        47009 ops/s  p50   321.3us p95   462.3us p99   726.4us max   928.9us
+[babel-fjall-wal-dict] put-mt     x64    12800 ops        92002 ops/s  p50   703.3us p95    1.11ms p99    1.48ms max    2.06ms
+[babel-fjall-wal-dict] get        x1     20000 ops       172637 ops/s  p50     5.1us p95     8.7us p99    12.4us max   419.8us
+[babel-fjall-wal-dict] get-mt     x4     40000 ops       662708 ops/s  p50     5.1us p95     8.5us p99    11.5us max   160.5us
+[babel-fjall-wal-dict] get-mt     x16   160000 ops      1763443 ops/s  p50     5.7us p95     8.3us p99    19.3us max   12.14ms
+[babel-fjall-wal-dict] latest     x1      5000 ops        13270 ops/s  p50    66.3us p95   148.8us p99   207.9us max   395.2us
+[babel-fjall-wal-dict] latest-mt  x4     10000 ops        64656 ops/s  p50    57.2us p95   102.1us p99   142.7us max   419.1us
+[babel-fjall-wal-dict] latest-mt  x16    40000 ops       160576 ops/s  p50    66.6us p95   124.9us p99   351.6us max   24.87ms
+== postgres (100000 records x 512 B, durable)
+[postgres] load       100000 records in 0.83s of batches -> 120906 rec/s
+[postgres] load-batch x1       100 ops          121 ops/s  p50    8.25ms p95   10.87ms p99   11.76ms max   12.31ms
+[postgres] space           62.62 MB  (pg_total_relation_size(messages): heap + TOAST + primary key index (WAL excluded))
+[postgres] put        x1       300 ops         4250 ops/s  p50   221.5us p95   328.2us p99   494.8us max   921.7us
+[postgres] put-mt     x1       200 ops         4379 ops/s  p50   210.6us p95   300.7us p99   503.0us max    1.35ms
+[postgres] put-mt     x4       800 ops        11715 ops/s  p50   320.3us p95   490.5us p99   773.6us max    2.44ms
+[postgres] put-mt     x16     3200 ops        29537 ops/s  p50   453.6us p95   840.0us p99    1.85ms max    4.25ms
+[postgres] put-mt     x64    12800 ops        35480 ops/s  p50    1.01ms p95    2.56ms p99    4.40ms max   95.32ms
+[postgres] get        x1     20000 ops         9415 ops/s  p50   102.1us p95   143.8us p99   205.6us max    2.54ms
+[postgres] get-mt     x4     40000 ops        32619 ops/s  p50   117.6us p95   153.4us p99   225.0us max    5.40ms
+[postgres] get-mt     x16   160000 ops        79883 ops/s  p50   154.0us p95   251.7us p99   369.7us max   37.61ms
+[postgres] latest     x1      5000 ops         4174 ops/s  p50   216.7us p95   365.7us p99   481.1us max    1.74ms
+[postgres] latest-mt  x4     10000 ops        14305 ops/s  p50   268.2us p95   399.9us p99   543.1us max    1.61ms
+[postgres] latest-mt  x16    40000 ops        31474 ops/s  p50   348.9us p95   638.0us p99    1.26ms max   49.93ms
+== mongo (100000 records x 512 B, durable)
+[mongo] load       100000 records in 1.29s of batches -> 77561 rec/s
+[mongo] load-batch x1       100 ops           78 ops/s  p50   11.88ms p95   22.19ms p99   26.19ms max   33.61ms
+[mongo] space           32.12 MB  (dbStats storageSize 30076928 + indexSize 2043904 (WiredTiger, default snappy block compression; journal excluded))
+[mongo] put        x1       300 ops          640 ops/s  p50    1.49ms p95    2.12ms p99    2.44ms max    2.66ms
+[mongo] put-mt     x1       200 ops          598 ops/s  p50    1.58ms p95    2.30ms p99    2.65ms max    3.75ms
+[mongo] put-mt     x4       800 ops         1479 ops/s  p50    2.26ms p95    2.92ms p99    3.28ms max   85.47ms
+[mongo] put-mt     x16     3200 ops         6114 ops/s  p50    2.50ms p95    3.19ms p99    4.13ms max    9.02ms
+[mongo] put-mt     x64    12800 ops        16404 ops/s  p50    3.67ms p95    5.40ms p99    7.39ms max   10.40ms
+[mongo] get        x1     20000 ops         4085 ops/s  p50   221.4us p95   355.5us p99   551.8us max    5.68ms
+[mongo] get-mt     x4     40000 ops        14299 ops/s  p50   261.9us p95   375.6us p99   599.0us max    2.65ms
+[mongo] get-mt     x16   160000 ops        25209 ops/s  p50   457.2us p95    1.53ms p99    2.94ms max   11.35ms
+[mongo] latest     x1      5000 ops         1498 ops/s  p50   592.2us p95    1.13ms p99    1.66ms max    3.13ms
+[mongo] latest-mt  x4     10000 ops         5952 ops/s  p50   630.2us p95   999.5us p99    1.32ms max    2.52ms
+[mongo] latest-mt  x16    40000 ops        10832 ops/s  p50    1.09ms p95    3.33ms p99    5.34ms max   19.16ms
+
+== summary (ops/s; p99)
+load-batch x1   babel-wal-tcp-raw: 81/s p99 114.43ms | babel-wal-tcp: 97/s p99 22.36ms | babel-wal-tcp-dict: 106/s p99 20.76ms | babel-fjall-wal-tcp: 147/s p99 16.58ms | babel-fjall-wal-tcp-dict: 138/s p99 18.54ms | babel-wal-raw: 90/s p99 113.07ms | babel-wal: 132/s p99 20.00ms | babel-wal-dict: 139/s p99 10.02ms | babel-fjall-wal-raw: 185/s p99 13.80ms | babel-fjall-wal: 191/s p99 7.16ms | babel-fjall-wal-dict: 184/s p99 7.01ms | postgres: 121/s p99 11.76ms | mongo: 78/s p99 26.19ms
+put        x1   babel-wal-tcp-raw: 3627/s p99 645.2us | babel-wal-tcp: 3499/s p99 528.7us | babel-wal-tcp-dict: 3927/s p99 451.2us | babel-fjall-wal-tcp: 4405/s p99 403.5us | babel-fjall-wal-tcp-dict: 4748/s p99 349.3us | babel-wal-raw: 5478/s p99 331.4us | babel-wal: 5138/s p99 311.2us | babel-wal-dict: 5147/s p99 337.0us | babel-fjall-wal-raw: 8364/s p99 218.6us | babel-fjall-wal: 6661/s p99 295.8us | babel-fjall-wal-dict: 6422/s p99 254.8us | postgres: 4250/s p99 494.8us | mongo: 640/s p99 2.44ms
+put-mt     x1   babel-wal-tcp-raw: 3923/s p99 375.6us | babel-wal-tcp: 3707/s p99 430.4us | babel-wal-tcp-dict: 3970/s p99 377.6us | babel-fjall-wal-tcp: 4047/s p99 458.5us | babel-fjall-wal-tcp-dict: 4744/s p99 298.5us | babel-wal-raw: 5767/s p99 285.7us | babel-wal: 5315/s p99 275.5us | babel-wal-dict: 5404/s p99 286.1us | babel-fjall-wal-raw: 8293/s p99 210.4us | babel-fjall-wal: 6735/s p99 246.2us | babel-fjall-wal-dict: 6428/s p99 247.2us | postgres: 4379/s p99 503.0us | mongo: 598/s p99 2.65ms
+put-mt     x4   babel-wal-tcp-raw: 10590/s p99 578.5us | babel-wal-tcp: 9097/s p99 706.9us | babel-wal-tcp-dict: 9242/s p99 859.4us | babel-fjall-wal-tcp: 12681/s p99 498.4us | babel-fjall-wal-tcp-dict: 13005/s p99 503.6us | babel-wal-raw: 12672/s p99 545.3us | babel-wal: 13322/s p99 473.5us | babel-wal-dict: 13206/s p99 448.9us | babel-fjall-wal-raw: 18731/s p99 351.7us | babel-fjall-wal: 18394/s p99 339.3us | babel-fjall-wal-dict: 18207/s p99 312.2us | postgres: 11715/s p99 773.6us | mongo: 1479/s p99 3.28ms
+put-mt     x16  babel-wal-tcp-raw: 22584/s p99 1.36ms | babel-wal-tcp: 19561/s p99 1.44ms | babel-wal-tcp-dict: 13305/s p99 3.11ms | babel-fjall-wal-tcp: 26626/s p99 967.8us | babel-fjall-wal-tcp-dict: 23990/s p99 1.18ms | babel-wal-raw: 34664/s p99 1.07ms | babel-wal: 30206/s p99 1.16ms | babel-wal-dict: 31917/s p99 950.7us | babel-fjall-wal-raw: 56697/s p99 513.2us | babel-fjall-wal: 48094/s p99 597.6us | babel-fjall-wal-dict: 47009/s p99 726.4us | postgres: 29537/s p99 1.85ms | mongo: 6114/s p99 4.13ms
+put-mt     x64  babel-wal-tcp-raw: 35975/s p99 2.77ms | babel-wal-tcp: 22366/s p99 4.72ms | babel-wal-tcp-dict: 24063/s p99 4.92ms | babel-fjall-wal-tcp: 29642/s p99 4.98ms | babel-fjall-wal-tcp-dict: 29739/s p99 3.53ms | babel-wal-raw: 56886/s p99 2.80ms | babel-wal: 51701/s p99 2.68ms | babel-wal-dict: 56957/s p99 2.47ms | babel-fjall-wal-raw: 97330/s p99 1.44ms | babel-fjall-wal: 99726/s p99 1.33ms | babel-fjall-wal-dict: 92002/s p99 1.48ms | postgres: 35480/s p99 4.40ms | mongo: 16404/s p99 7.39ms
+get        x1   babel-wal-tcp-raw: 16562/s p99 123.1us | babel-wal-tcp: 17141/s p99 99.1us | babel-wal-tcp-dict: 18621/s p99 99.1us | babel-fjall-wal-tcp: 14996/s p99 123.3us | babel-fjall-wal-tcp-dict: 16411/s p99 102.7us | babel-wal-raw: 138174/s p99 30.1us | babel-wal: 182565/s p99 15.7us | babel-wal-dict: 304753/s p99 6.2us | babel-fjall-wal-raw: 105251/s p99 33.3us | babel-fjall-wal: 160947/s p99 17.8us | babel-fjall-wal-dict: 172637/s p99 12.4us | postgres: 9415/s p99 205.6us | mongo: 4085/s p99 551.8us
+get-mt     x4   babel-wal-tcp-raw: 70152/s p99 105.7us | babel-wal-tcp: 63330/s p99 105.4us | babel-wal-tcp-dict: 65030/s p99 95.5us | babel-fjall-wal-tcp: 57661/s p99 115.1us | babel-fjall-wal-tcp-dict: 57628/s p99 110.5us | babel-wal-raw: 992248/s p99 33.0us | babel-wal: 1019646/s p99 7.8us | babel-wal-dict: 1094670/s p99 7.6us | babel-fjall-wal-raw: 549552/s p99 63.6us | babel-fjall-wal: 624203/s p99 12.5us | babel-fjall-wal-dict: 662708/s p99 11.5us | postgres: 32619/s p99 225.0us | mongo: 14299/s p99 599.0us
+get-mt     x16  babel-wal-tcp-raw: 133382/s p99 196.0us | babel-wal-tcp: 143506/s p99 223.8us | babel-wal-tcp-dict: 150819/s p99 276.1us | babel-fjall-wal-tcp: 145697/s p99 222.3us | babel-fjall-wal-tcp-dict: 142923/s p99 214.3us | babel-wal-raw: 2238417/s p99 94.7us | babel-wal: 3146287/s p99 10.7us | babel-wal-dict: 3356493/s p99 9.5us | babel-fjall-wal-raw: 2362670/s p99 25.2us | babel-fjall-wal: 1848587/s p99 18.2us | babel-fjall-wal-dict: 1763443/s p99 19.3us | postgres: 79883/s p99 369.7us | mongo: 25209/s p99 2.94ms
+latest     x1   babel-wal-tcp-raw: 7055/s p99 327.4us | babel-wal-tcp: 7693/s p99 281.9us | babel-wal-tcp-dict: 7357/s p99 306.7us | babel-fjall-wal-tcp: 5667/s p99 398.2us | babel-fjall-wal-tcp-dict: 5590/s p99 361.1us | babel-wal-raw: 20329/s p99 152.0us | babel-wal: 23507/s p99 166.3us | babel-wal-dict: 22365/s p99 168.4us | babel-fjall-wal-raw: 13258/s p99 161.3us | babel-fjall-wal: 12996/s p99 210.2us | babel-fjall-wal-dict: 13270/s p99 207.9us | postgres: 4174/s p99 481.1us | mongo: 1498/s p99 1.66ms
+latest-mt  x4   babel-wal-tcp-raw: 30366/s p99 204.9us | babel-wal-tcp: 34553/s p99 210.2us | babel-wal-tcp-dict: 30171/s p99 239.2us | babel-fjall-wal-tcp: 24899/s p99 308.8us | babel-fjall-wal-tcp-dict: 23550/s p99 312.3us | babel-wal-raw: 87804/s p99 85.0us | babel-wal: 130021/s p99 96.3us | babel-wal-dict: 115072/s p99 110.0us | babel-fjall-wal-raw: 51766/s p99 144.1us | babel-fjall-wal: 60439/s p99 162.2us | babel-fjall-wal-dict: 64656/s p99 142.7us | postgres: 14305/s p99 543.1us | mongo: 5952/s p99 1.32ms
+latest-mt  x16  babel-wal-tcp-raw: 62977/s p99 483.0us | babel-wal-tcp: 77475/s p99 407.7us | babel-wal-tcp-dict: 78766/s p99 407.5us | babel-fjall-wal-tcp: 65880/s p99 543.9us | babel-fjall-wal-tcp-dict: 56748/s p99 560.1us | babel-wal-raw: 238300/s p99 233.5us | babel-wal: 347873/s p99 136.8us | babel-wal-dict: 329844/s p99 150.3us | babel-fjall-wal-raw: 132121/s p99 408.9us | babel-fjall-wal: 157476/s p99 323.4us | babel-fjall-wal-dict: 160576/s p99 351.6us | postgres: 31474/s p99 1.26ms | mongo: 10832/s p99 5.34ms
+space      babel-wal-tcp-raw: 134.75 MB
+space-compacted babel-wal-tcp-raw: 69.62 MB
+space      babel-wal-tcp: 67.38 MB
+space-compacted babel-wal-tcp: 34.41 MB
+space      babel-wal-tcp-dict: 67.38 MB
+space-compacted babel-wal-tcp-dict: 31.45 MB
+space      babel-fjall-wal-tcp: 29.03 MB
+space-compacted babel-fjall-wal-tcp: 28.87 MB
+space      babel-fjall-wal-tcp-dict: 25.79 MB
+space-compacted babel-fjall-wal-tcp-dict: 25.63 MB
+space      babel-wal-raw: 134.75 MB
+space-compacted babel-wal-raw: 69.62 MB
+space      babel-wal: 67.38 MB
+space-compacted babel-wal: 34.83 MB
+space      babel-wal-dict: 67.38 MB
+space-compacted babel-wal-dict: 31.45 MB
+space      babel-fjall-wal-raw: 38.64 MB
+space-compacted babel-fjall-wal-raw: 38.52 MB
+space      babel-fjall-wal: 29.58 MB
+space-compacted babel-fjall-wal: 29.43 MB
+space      babel-fjall-wal-dict: 25.79 MB
+space-compacted babel-fjall-wal-dict: 25.63 MB
+space      postgres: 62.62 MB
+space      mongo: 32.12 MB
