@@ -11,7 +11,7 @@ pacote Python `babeldb` com tipos (`py.typed` + `.pyi`).
 ### A partir do wheel já construído
 
 ```powershell
-pip install bindings\python\target\wheels\babeldb-0.1.0-cp38-abi3-win_amd64.whl
+pip install C:\Users\v4mpt\babeldb\dist\babeldb-0.1.0-cp38-abi3-win_amd64.whl
 ```
 
 O wheel é `abi3`: o mesmo arquivo serve para CPython 3.8 ou mais novo (Windows x64).

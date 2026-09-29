@@ -20,7 +20,7 @@ passando por um *group committer*.
 ### A partir do tarball
 
 ```sh
-npm install /caminho/para/babeldb-0.1.0.tgz
+npm install C:/Users/v4mpt/babeldb/dist/babeldb-0.1.0.tgz
 ```
 
 O tarball já traz o binário compilado (`babeldb.win32-x64-msvc.node`), então
