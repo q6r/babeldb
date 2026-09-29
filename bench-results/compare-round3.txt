@@ -10,7 +10,7 @@
    Compiling mongodb-internal-macros v3.9.1
    Compiling mongodb v3.9.1
    Compiling fjall v3.1.10
-   Compiling babeldb v0.1.0 (C:\Users\v4mpt\babeldb)
+   Compiling babeldb v0.1.0 (<repo>)
     Finished `bench` profile [optimized + debuginfo] target(s) in 1m 45s
      Running benches\compare.rs (target\release\deps\compare-67fa4b9623438596.exe)
 == babel-wal-tcp-raw (100000 records x 512 B, durable)

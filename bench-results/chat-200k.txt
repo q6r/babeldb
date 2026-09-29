@@ -1,4 +1,4 @@
-   Compiling babeldb v0.1.0 (C:\Users\v4mpt\babeldb)
+   Compiling babeldb v0.1.0 (<repo>)
     Finished `bench` profile [optimized + debuginfo] target(s) in 21.88s
      Running benches\engine.rs (target\release\deps\engine-429a5c126f35b0fc.exe)
 babeldb engine bench run 1790517782855-21352 ({"os":"windows","os_version":"10.0.26200.9457","arch":"x86_64","cpu":"AMD Ryzen 7 5700","logical_cpus":16,"ram_total_bytes":34139103232,"ram_available_bytes_at_start":9750085632,"fs":{"root":"C:\\","file_system":"NTFS","cluster_bytes":4096,"total_bytes":999044411392,"free_bytes":94015205376},"rustc":"rustc 1.97.1 (8bab26f4f 2026-07-14)","profile":"release","features":[],"git_commit":"c6a92f5e35dcf0e59eeab7963cbac629e2f84204","git_dirty":true,"cargo_lock_blake3":"7b6d3953f12a7ff77913f89a80bbd0e454cd6d0ac2d700628f080d9a7a948087","datasets_version":1,"zstd":"1.5.7","bench_exe_bytes":2764800,"note":"KINGSTON SNV3S1000G NVMe; OS file cache warm; machine otherwise idle"})

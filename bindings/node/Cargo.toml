@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.97"
 publish = false
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/q6r/babeldb"
 description = "Node.js native binding (napi-rs v3) for babeldb: embedded fjall + WAL store with group-committed writes"
 
 # Standalone package: its own workspace root, lock file and target directory.

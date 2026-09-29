@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.97"
 publish = false
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/q6r/babeldb"
 description = "Python binding of babeldb: the native module babeldb._native (built with maturin)"
 
 [lib]

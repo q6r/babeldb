@@ -1,4 +1,4 @@
-   Compiling babeldb v0.1.0 (C:\Users\v4mpt\babeldb)
+   Compiling babeldb v0.1.0 (<repo>)
     Finished `bench` profile [optimized + debuginfo] target(s) in 41.73s
      Running benches\compare.rs (target\release\deps\compare-67fa4b9623438596.exe)
 == babel-fjall-wal (100000 records x 512 B, durable)

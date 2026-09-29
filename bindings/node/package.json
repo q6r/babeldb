@@ -4,7 +4,19 @@
   "description": "Embedded key-value store (babeldb: fjall + WAL, group-committed writes) as a native Node.js addon",
   "main": "index.js",
   "types": "index.d.ts",
-  "license": "UNLICENSED",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/q6r/babeldb.git",
+    "directory": "bindings/node"
+  },
+  "keywords": [
+    "database",
+    "key-value",
+    "embedded",
+    "storage",
+    "napi-rs"
+  ],
   "private": false,
   "napi": {
     "binaryName": "babeldb",
@@ -17,7 +29,9 @@
     "index.js",
     "index.d.ts",
     "*.node",
-    "README.md"
+    "README.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
   ],
   "engines": {
     "node": ">= 18"

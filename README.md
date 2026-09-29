@@ -114,7 +114,7 @@ só no Windows 11 (NVMe); Linux e macOS ainda não foram compilados nem testados
 
 ```toml
 [dependencies]
-babeldb = { path = "C:/Users/v4mpt/babeldb", features = ["fjall"] }
+babeldb = { git = "https://github.com/q6r/babeldb", features = ["fjall"] }
 ```
 
 Embarcado no mesmo processo, a configuração que venceu PostgreSQL/MongoDB na comparação
@@ -214,5 +214,29 @@ Etapas da especificação de projeto (§10), verificadas em 27/09/2026 pela suí
   benchmarks.
 - [`docs/comparison.md`](docs/comparison.md) — babeldb × PostgreSQL × MongoDB locais
   (mesmos dados e operações, durabilidade equivalente) e o plano de otimização.
-- Especificação de projeto (Babel puro × adaptativo):
-  `C:\Users\v4mpt\.traycer\epics\b35e3479-77fe-4fea-bba0-164773e26a94\artifacts\babeldb-design\index.md`.
+- [`docs/design.md`](docs/design.md) — especificação de projeto (Babel puro × adaptativo);
+  [`docs/discord-scale-research.md`](docs/discord-scale-research.md) — pesquisa de escala tipo Discord.
+
+## Estabilidade
+
+Versão `0.x`: a API e o formato em disco podem mudar entre versões menores (o formato v1 é
+verificado pelos testes de compatibilidade em `tests/format_compat.rs`, e mudanças de formato
+são anotadas em `docs/format.md`). Os números de desempenho foram medidos numa única máquina
+(Ryzen 7 5700, Windows 11, NVMe) e estão rotulados assim em `docs/comparison.md`.
+
+## Licença
+
+Licenciado sob a sua escolha de
+
+- Apache License, Version 2.0 ([`LICENSE-APACHE`](LICENSE-APACHE)), ou
+- MIT license ([`LICENSE-MIT`](LICENSE-MIT)).
+
+Salvo declaração explícita em contrário, qualquer contribuição enviada para inclusão no
+babeldb, conforme definido na licença Apache-2.0, é licenciada da mesma forma dupla, sem
+termos ou condições adicionais.
+
+## Créditos
+
+A organização em módulos, os metadados de origem e a ideia da linha de comando foram
+inspirados conceitualmente no projeto [margostino/babeldb](https://github.com/margostino/babeldb)
+(Go, Apache-2.0). Nenhum código dele foi copiado.
