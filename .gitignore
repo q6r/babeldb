@@ -3,3 +3,4 @@
 *.redb.tmp
 /data
 /.worktrees
+/dist
