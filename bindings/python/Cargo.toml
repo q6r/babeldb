@@ -1,0 +1,25 @@
+[package]
+name = "babeldb-python"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+description = "Python binding of babeldb: the native module babeldb._native (built with maturin)"
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+babeldb = { path = "../..", features = ["fjall"] }
+pyo3 = { version = "0.28.3", features = ["extension-module", "abi3-py38"] }
+
+# Standalone: not a member of any parent workspace.
+[workspace]
+
+[lints.rust]
+# MSVC's link.exe reports the import library it writes for every cdylib.
+linker_messages = "allow"
+
+[profile.release]
+debug = "line-tables-only"
