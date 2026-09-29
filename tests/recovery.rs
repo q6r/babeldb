@@ -248,6 +248,24 @@ fn say(line: &str) {
     out.flush().expect("child stdout flush");
 }
 
+/// The acknowledgements of one commit unit (or one sync), in ONE write: the
+/// parent may kill the child at any moment, and a kill between two lines of a
+/// unit would leave it half acknowledged. At most 20 short lines here, well
+/// under PIPE_BUF (4096 on Linux), so the write is atomic on a pipe.
+fn say_acks(tag: &str, acks: impl IntoIterator<Item = (u64, u64)>) {
+    use std::fmt::Write as _;
+    let mut text = String::new();
+    for (s, r) in acks {
+        writeln!(text, "{tag} {s} {r}").expect("formatting into a String");
+    }
+    if text.is_empty() {
+        return;
+    }
+    let mut out = std::io::stdout().lock();
+    out.write_all(text.as_bytes()).expect("child stdout");
+    out.flush().expect("child stdout flush");
+}
+
 /// Entry point of the child process; a no-op in a normal test run.
 #[test]
 #[ignore = "child-process entry point of the crash tests (no-op unless BABEL_CHILD_DB is set)"]
@@ -327,27 +345,19 @@ fn child_write(path: &Path, kind: Kind, round: u64) {
             Kind::Group => {
                 db.sync()
                     .unwrap_or_else(|e| panic!("child: sync failed: {e}"));
-                for (s, r) in &acked {
-                    say(&format!("COMMITTED {s} {r}"));
-                }
+                say_acks("COMMITTED", acked);
             }
             Kind::Deferred => {
-                for (s, r) in &acked {
-                    say(&format!("VISIBLE {s} {r}"));
-                }
+                say_acks("VISIBLE", acked.iter().copied());
                 unsynced.extend(acked);
                 if (unit + 1).is_multiple_of(DEFERRED_SYNC_EVERY) {
                     db.sync()
                         .unwrap_or_else(|e| panic!("child: sync failed: {e}"));
-                    for (s, r) in unsynced.drain(..) {
-                        say(&format!("COMMITTED {s} {r}"));
-                    }
+                    say_acks("COMMITTED", unsynced.drain(..));
                 }
             }
             _ => {
-                for (s, r) in &acked {
-                    say(&format!("COMMITTED {s} {r}"));
-                }
+                say_acks("COMMITTED", acked);
             }
         }
         step += steps.len() as u64;
