@@ -118,7 +118,8 @@ babeldb = { path = "C:/Users/v4mpt/babeldb", features = ["fjall"] }
 ```
 
 Embarcado no mesmo processo, a configuração que venceu PostgreSQL/MongoDB na comparação
-(fjall + WAL write-through; `docs/comparison.md`):
+(fjall + WAL write-through; `docs/comparison.md`). Exemplo completo que compila e roda:
+`cargo run --release --example embedded --features fjall`.
 
 ```rust
 use std::sync::Arc;
