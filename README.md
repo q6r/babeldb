@@ -149,6 +149,23 @@ writer.delete(key.to_vec(), Expect::Any)?;
   cliente em `babeldb::cli::server::Client`), hoje com o backend redb na CLI.
 - `Expect::Absent` falha se a chave existir; `Expect::Revision(r)` faz compare-and-set.
 
+## Usar em Python e Node.js
+
+Bibliotecas nativas embarcadas (o banco roda dentro do processo, como o SQLite), com a mesma
+API nas duas linguagens: `open`, `put` (com `if_absent`/`ifAbsent` e compare-and-set por
+revisão), `get`, `delete`, `scan`/`keys` por prefixo ou intervalo, `batch` atômico (tudo ou
+nada), `sync`, `close`, e helpers de chave de mensagem (canal, id). Por enquanto só há binários
+para **Windows x64**.
+
+| linguagem | instalar | documentação |
+|---|---|---|
+| Python ≥ 3.8 | `pip install dist/babeldb-0.1.0-cp38-abi3-win_amd64.whl` | [`bindings/python/README.md`](bindings/python/README.md) |
+| Node.js | `npm install dist/babeldb-0.1.0.tgz` | [`bindings/node/README.md`](bindings/node/README.md) |
+
+`dist/` não é versionado: gere os pacotes com `maturin build --release` (em `bindings/python`)
+e `npx napi build --platform --release` + `npm pack` (em `bindings/node`); os READMEs das
+bibliotecas explicam.
+
 ## Layout do repositório
 
 | caminho | conteúdo |
