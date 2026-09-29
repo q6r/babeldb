@@ -32,7 +32,7 @@ jobs:
       - name: Build (all targets, all features)
         run: cargo build --all-targets --features lmdb,fjall,compare
       - name: Test
-        run: cargo test --features lmdb,fjall
+        run: cargo test --no-fail-fast --features lmdb,fjall
 
   # macOS runs when the repository is public (Actions minutes are free there;
   # a private repository pays 10x for macOS runners) or when started by hand.
@@ -49,7 +49,7 @@ jobs:
       - name: Build (all targets, all features)
         run: cargo build --all-targets --features lmdb,fjall,compare
       - name: Test
-        run: cargo test --features lmdb,fjall
+        run: cargo test --no-fail-fast --features lmdb,fjall
 
   python:
     name: python binding (${{ matrix.os }})

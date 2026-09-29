@@ -270,6 +270,9 @@ pub const SINGLE_KEYSPACE: &str = "tables";
 
 /// Upper bound on the wait for memtable flushes (`compact`, `flush_memtables`).
 const FLUSH_TIMEOUT: Duration = Duration::from_secs(300);
+/// How long `compact` keeps collecting old versions while their files are
+/// still on disk (see `has_unlisted_files`).
+const LEFTOVER_FILES_WAIT: Duration = Duration::from_secs(5);
 
 /// Level-0 runs from which the compaction watchdog runs compactions itself
 /// (where fjall 3.1.10 starts delaying commits; module documentation,
@@ -798,6 +801,34 @@ impl FjallStore {
     /// *Key-value separation*). A compaction drops the blob files that were
     /// dead, and copies the stale ones, by what it knew when it started: the
     /// garbage its own merge finds is acted on by the next one.
+    /// Waits until fjall has no flush queued and no compaction running, or
+    /// fails at `deadline` (used by `compact`, which holds `&mut self`: no new
+    /// writes can schedule more work meanwhile).
+    fn wait_background_idle(&self, deadline: Instant) -> Result<()> {
+        let db = self.db.inner();
+        while db.outstanding_flushes() > 0 || db.active_compactions() > 0 {
+            if Instant::now() >= deadline {
+                return Err(Error::backend("fjall: timed out waiting for background flushes and compactions"));
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        Ok(())
+    }
+
+    /// Whether a keyspace directory holds more table or blob files than its
+    /// current version lists (files of released versions not deleted yet).
+    fn has_unlisted_files(&self) -> bool {
+        let count = |dir: PathBuf| {
+            std::fs::read_dir(dir)
+                .map(|d| d.filter_map(|e| e.ok()).filter(|e| e.file_type().is_ok_and(|t| t.is_file())).count())
+                .unwrap_or(0)
+        };
+        self.distinct_keyspaces().iter().any(|ks| {
+            let ks = ks.inner();
+            count(ks.path().join("tables")) > ks.table_count() || count(ks.path().join("blobs")) > ks.blob_file_count()
+        })
+    }
+
     fn collect_blob_garbage(&self, ks: &Keyspace) -> Result<()> {
         if ks.fragmented_blob_bytes() == 0 {
             return Ok(());
@@ -1146,10 +1177,25 @@ impl Store for FjallStore {
         // memtable rotation raises the watermark. `&mut self` guarantees that
         // no snapshot of this store is open, so every version but the latest
         // can go now (the new version was published below `visible_seqno`).
-        let watermark = self.db.inner().visible_seqno();
-        for ks in self.distinct_keyspaces() {
-            let ks = ks.inner();
-            ks.tree.get_version_history_lock().maintenance(ks.path(), watermark).map_err(Error::backend)?;
+        // Compactions fjall runs in the background (scheduled by the flushes
+        // above) hold the versions they read, and with them the replaced table
+        // and blob files, which would then stay on disk until the next memtable
+        // rotation (measured on a 4-core Linux CI runner, never on the 16-core
+        // Windows machine): collect once fjall is idle, and again while files
+        // no version lists are still on disk (best effort, bounded).
+        self.wait_background_idle(Instant::now() + FLUSH_TIMEOUT)?;
+        let retry_until = Instant::now() + LEFTOVER_FILES_WAIT;
+        loop {
+            let watermark = self.db.inner().visible_seqno();
+            for ks in self.distinct_keyspaces() {
+                let ks = ks.inner();
+                ks.tree.get_version_history_lock().maintenance(ks.path(), watermark).map_err(Error::backend)?;
+            }
+            if !self.has_unlisted_files() || Instant::now() >= retry_until {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+            self.wait_background_idle(retry_until)?;
         }
         Ok(true)
     }
