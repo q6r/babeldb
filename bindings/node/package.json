@@ -1,0 +1,34 @@
+{
+  "name": "babeldb",
+  "version": "0.1.0",
+  "description": "Embedded key-value store (babeldb: fjall + WAL, group-committed writes) as a native Node.js addon",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "license": "UNLICENSED",
+  "private": false,
+  "napi": {
+    "binaryName": "babeldb",
+    "targets": [
+      "x86_64-pc-windows-msvc"
+    ],
+    "dtsHeaderFile": "dts-header.d.ts"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "*.node",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">= 18"
+  },
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "test": "node --test __test__/babeldb.test.mjs",
+    "bench": "node bench.mjs"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.10.5"
+  }
+}

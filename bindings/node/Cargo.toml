@@ -1,0 +1,28 @@
+[package]
+name = "babeldb-node"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+description = "Node.js native binding (napi-rs v3) for babeldb: embedded fjall + WAL store with group-committed writes"
+
+# Standalone package: its own workspace root, lock file and target directory.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+babeldb = { path = "../..", features = ["fjall"] }
+napi = { version = "3.13", features = ["napi8"] }
+napi-derive = "3.6"
+
+[build-dependencies]
+napi-build = "2.5"
+
+[profile.release]
+strip = "symbols"
+
+# MSVC prints "Creating library ... .lib and object ... .exp" when linking a cdylib.
+[lints.rust]
+linker_messages = "allow"
