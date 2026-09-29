@@ -105,6 +105,49 @@ assert_eq!(db.get(b"usuario/42")?.as_deref(), Some(&b"hello"[..]));
 db.put(b"usuario/42", b"outro", Expect::Revision(rev))?; // concorrência otimista
 ```
 
+## Usar em outro projeto (Rust)
+
+Versão estável: tag `v0.1.0` (rodada 5 + vigia de compactação; suíte completa verde). Testada
+só no Windows 11 (NVMe); Linux e macOS ainda não foram compilados nem testados.
+
+`Cargo.toml` do outro projeto:
+
+```toml
+[dependencies]
+babeldb = { path = "C:/Users/v4mpt/babeldb", features = ["fjall"] }
+```
+
+Embarcado no mesmo processo, a configuração que venceu PostgreSQL/MongoDB na comparação
+(fjall + WAL write-through; `docs/comparison.md`):
+
+```rust
+use std::sync::Arc;
+use babeldb::config::WalConfig;
+use babeldb::scale::chat::{channel_prefix, message_key};
+use babeldb::scale::group_commit::{GroupCommitConfig, GroupCommitter};
+use babeldb::{Config, Db, Expect, ScanOptions};
+
+let db = Arc::new(Db::open_fjall_wal("dados/babel", Config::adaptive(), WalConfig::default())?);
+// Escritas de várias threads: group commit (um commit durável por lote).
+let writer = GroupCommitter::new(db.clone(), GroupCommitConfig::default())?;
+
+let key = message_key(canal, id); // canal BE ‖ id BE: as mensagens de um canal ficam em ordem
+writer.put(key.to_vec(), payload.to_vec(), Expect::Any)?; // durável quando retorna
+let valor: Option<Vec<u8>> = db.get(&key)?;
+// as 50 mensagens mais novas do canal
+let ultimas = db.scan(
+    &ScanOptions::prefix(&channel_prefix(canal)).reverse(true).limit(50).with_values(true),
+)?;
+writer.delete(key.to_vec(), Expect::Any)?;
+```
+
+- As chamadas bloqueiam: num servidor tokio/axum, chame-as dentro de
+  `tokio::task::spawn_blocking` e compartilhe `db` e `writer` com `Arc` (são `Send + Sync`).
+- Um diretório é aberto por um processo por vez (trava exclusiva). Para vários processos ou
+  outras linguagens há o servidor TCP (`babeldb --db <arquivo> serve --addr 127.0.0.1:7878`,
+  cliente em `babeldb::cli::server::Client`), hoje com o backend redb na CLI.
+- `Expect::Absent` falha se a chave existir; `Expect::Revision(r)` faz compare-and-set.
+
 ## Layout do repositório
 
 | caminho | conteúdo |
