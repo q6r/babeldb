@@ -1,0 +1,29 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "babeldb"
+version = "0.1.0"
+description = "babeldb embedded in Python: a native, in-process, durable and thread-safe key-value store"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Operating System :: Microsoft :: Windows",
+    "Topic :: Database :: Database Engines/Servers",
+    "Typing :: Typed",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.maturin]
+python-source = "python"
+module-name = "babeldb._native"
+bindings = "pyo3"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
