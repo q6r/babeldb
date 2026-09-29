@@ -184,6 +184,12 @@
 //!   sealed memtable and 4 level-0 runs with separation, and at 15 level-0
 //!   runs without it, at half the overwrite throughput (~50 against ~105
 //!   MB/s); fjall starts delaying commits at 4 sealed memtables or 20 runs.
+//! * Known issue (Linux): on the GitHub Actions Linux runner, `compact` left
+//!   ~43 % dead bytes in the blob files in 2 of 3 runs of `store_fjall`
+//!   `kv_separated_values_survive_reopen_and_compact_reclaims_their_garbage`
+//!   (4,674,863 bytes of files for 3,276,800 live) while fjall reported no
+//!   fragmented bytes; on Windows every run reclaims all of them. The values
+//!   read back are always correct; only space is lost. Not understood yet.
 //!
 //! # Compaction watchdog
 //!
