@@ -108,7 +108,7 @@ db.put(b"usuario/42", b"outro", Expect::Revision(rev))?; // concorrência otimis
 ## Usar em outro projeto (Rust)
 
 Versão estável: `0.1.1` no [crates.io](https://crates.io/crates/babeldb), no
-[PyPI](https://pypi.org/project/babeldb/) e no [npm](https://www.npmjs.com/package/babeldb).
+[PyPI](https://pypi.org/project/babeldb/) e no [npm](https://www.npmjs.com/package/@q6r/babeldb) (`@q6r/babeldb`).
 O CI testa Windows, Linux e macOS; as medições de desempenho são de Windows 11 (NVMe).
 
 `Cargo.toml` do outro projeto:
@@ -161,7 +161,7 @@ para **Windows x64**.
 | linguagem | instalar | documentação |
 |---|---|---|
 | Python ≥ 3.8 | `pip install babeldb` | [`bindings/python/README.md`](bindings/python/README.md) |
-| Node.js | `npm install babeldb` | [`bindings/node/README.md`](bindings/node/README.md) |
+| Node.js | `npm install @q6r/babeldb` | [`bindings/node/README.md`](bindings/node/README.md) |
 
 `dist/` não é versionado: gere os pacotes com `maturin build --release` (em `bindings/python`)
 e `npx napi build --platform --release` + `npm pack` (em `bindings/node`); os READMEs das

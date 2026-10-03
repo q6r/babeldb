@@ -2,10 +2,12 @@ name: Release (Node)
 
 # Builds the native addon for Windows x64, Linux x64/arm64 (glibc 2.17 via the
 # napi-rs cross toolchain) and macOS x64/arm64, then publishes ONE npm package,
-# `babeldb`, holding every platform binary (index.js loads the local
+# `@q6r/babeldb`, holding every platform binary (index.js loads the local
 # babeldb.<platform>.node first). Separate per-platform packages
 # (babeldb-win32-x64-msvc, ...) were refused by npm's spam detection on the
-# first release (403, "Package name triggered spam detection").
+# first release (403, "Package name triggered spam detection"), and the
+# unscoped name `babeldb` itself was refused as "too similar to existing
+# package babel": npm suggested the user scope.
 # Publishing happens when a GitHub Release is published, or on a manual run
 # with `publish` checked; otherwise a manual run only builds.
 # npm side: repository secret NPM_TOKEN (granular token with publish rights).
@@ -87,7 +89,7 @@ jobs:
           find artifacts -name 'babeldb.*.node' -exec mv {} . \;
           ls -la *.node
           test "$(ls *.node | wc -l)" -eq 5
-      - name: Publish babeldb (all platform binaries, no install scripts)
+      - name: Publish @q6r/babeldb (all platform binaries, no install scripts)
         run: npm publish --access public --provenance --ignore-scripts
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

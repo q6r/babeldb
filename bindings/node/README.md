@@ -20,7 +20,7 @@ passando por um *group committer*.
 ### A partir do tarball
 
 ```sh
-npm install babeldb
+npm install @q6r/babeldb
 ```
 
 O tarball já traz o binário compilado (`babeldb.win32-x64-msvc.node`), então
@@ -47,7 +47,7 @@ loader) e `index.d.ts` (os tipos, gerados a partir do Rust com o cabeçalho
 JavaScript (CommonJS):
 
 ```js
-const { open, messageKey, channelPrefix, parseMessageKey } = require('babeldb')
+const { open, messageKey, channelPrefix, parseMessageKey } = require('@q6r/babeldb')
 
 async function main() {
   const db = open('./dados/meu-banco') // cria o diretório se não existir
@@ -89,7 +89,7 @@ main()
 TypeScript (ESM):
 
 ```ts
-import { open, type BabelDbError, type Database } from 'babeldb'
+import { open, type BabelDbError, type Database } from '@q6r/babeldb'
 
 const db: Database = open('./dados/sessoes', { durability: 'buffered' })
 

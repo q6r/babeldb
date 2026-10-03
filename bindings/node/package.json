@@ -1,5 +1,5 @@
 {
-  "name": "babeldb",
+  "name": "@q6r/babeldb",
   "version": "0.1.1",
   "description": "Embedded key-value store (babeldb: fjall + WAL, group-committed writes) as a native Node.js addon",
   "main": "index.js",
