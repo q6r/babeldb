@@ -275,7 +275,7 @@ def test_properties_and_repr(db, tmp_path):
     assert os.path.samefile(db.path, tmp_path / "db")
     assert os.path.isabs(db.path)
     assert "babeldb.Db" in repr(db)
-    assert babeldb.__version__ == "0.1.0"
+    assert babeldb.__version__ == "0.1.1"
     assert isinstance(db, babeldb.Db)
 
 

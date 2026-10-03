@@ -107,14 +107,15 @@ db.put(b"usuario/42", b"outro", Expect::Revision(rev))?; // concorrência otimis
 
 ## Usar em outro projeto (Rust)
 
-Versão estável: tag `v0.1.0` (rodada 5 + vigia de compactação; suíte completa verde). Testada
-só no Windows 11 (NVMe); Linux e macOS ainda não foram compilados nem testados.
+Versão estável: `0.1.1` no [crates.io](https://crates.io/crates/babeldb), no
+[PyPI](https://pypi.org/project/babeldb/) e no [npm](https://www.npmjs.com/package/babeldb).
+O CI testa Windows, Linux e macOS; as medições de desempenho são de Windows 11 (NVMe).
 
 `Cargo.toml` do outro projeto:
 
 ```toml
 [dependencies]
-babeldb = { git = "https://github.com/q6r/babeldb", features = ["fjall"] }
+babeldb = { version = "0.1.1", features = ["fjall"] }
 ```
 
 Embarcado no mesmo processo, a configuração que venceu PostgreSQL/MongoDB na comparação
@@ -159,8 +160,8 @@ para **Windows x64**.
 
 | linguagem | instalar | documentação |
 |---|---|---|
-| Python ≥ 3.8 | `pip install dist/babeldb-0.1.0-cp38-abi3-win_amd64.whl` | [`bindings/python/README.md`](bindings/python/README.md) |
-| Node.js | `npm install dist/babeldb-0.1.0.tgz` | [`bindings/node/README.md`](bindings/node/README.md) |
+| Python ≥ 3.8 | `pip install babeldb` | [`bindings/python/README.md`](bindings/python/README.md) |
+| Node.js | `npm install babeldb` | [`bindings/node/README.md`](bindings/node/README.md) |
 
 `dist/` não é versionado: gere os pacotes com `maturin build --release` (em `bindings/python`)
 e `npx napi build --platform --release` + `npm pack` (em `bindings/node`); os READMEs das

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "babeldb"
-version = "0.1.0"
+version = "0.1.1"
 description = "babeldb embedded in Python: a native, in-process, durable and thread-safe key-value store"
 readme = "README.md"
 requires-python = ">=3.8"

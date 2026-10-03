@@ -11,7 +11,7 @@ pacote Python `babeldb` com tipos (`py.typed` + `.pyi`).
 ### A partir do wheel já construído
 
 ```powershell
-pip install babeldb-0.1.0-cp38-abi3-win_amd64.whl   # o wheel gerado (veja abaixo); depois da publicação: pip install babeldb
+pip install babeldb
 ```
 
 O wheel é `abi3`: o mesmo arquivo serve para CPython 3.8 ou mais novo (Windows x64).
@@ -25,7 +25,7 @@ Python 3.8+ e maturin. De dentro de `bindings/python`:
 python -m venv .venv
 .venv\Scripts\python -m pip install maturin pytest
 .venv\Scripts\maturin build --release -i .venv\Scripts\python.exe
-.venv\Scripts\python -m pip install --force-reinstall target\wheels\babeldb-0.1.0-cp38-abi3-win_amd64.whl
+.venv\Scripts\python -m pip install --force-reinstall target\wheels\babeldb-0.1.1-cp38-abi3-win_amd64.whl
 ```
 
 O wheel sai em `target\wheels\`. Para desenvolver, `.venv\Scripts\maturin develop --release`

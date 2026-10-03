@@ -20,7 +20,7 @@ passando por um *group committer*.
 ### A partir do tarball
 
 ```sh
-npm install ./babeldb-0.1.0.tgz   # o tarball gerado por npm pack (veja abaixo); depois da publicação: npm install babeldb
+npm install babeldb
 ```
 
 O tarball já traz o binário compilado (`babeldb.win32-x64-msvc.node`), então
@@ -35,7 +35,7 @@ Requisitos: Rust (a versão do `rust-toolchain.toml` da raiz do repositório,
 cd bindings/node
 npm install          # instala o @napi-rs/cli (devDependency)
 npm run build        # napi build --platform --release
-npm pack             # gera babeldb-0.1.0.tgz
+npm pack             # gera babeldb-0.1.1.tgz
 ```
 
 `npm run build` gera `babeldb.<plataforma>.node` (o addon), `index.js` (o
