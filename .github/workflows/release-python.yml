@@ -1,0 +1,89 @@
+name: Release (Python)
+
+# Builds abi3 wheels (CPython >= 3.8) for Windows, Linux (manylinux, glibc) and
+# macOS, plus the sdist. Publishing to PyPI happens only when a GitHub Release
+# is published; a manual run (workflow_dispatch) only builds and smoke-tests.
+# PyPI side: a Trusted Publisher for q6r/babeldb, workflow
+# release-python.yml, environment "pypi" (no token).
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wheels:
+    name: wheel (${{ matrix.platform.name }})
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { name: windows-x64, runner: windows-latest, target: x64, smoke: true }
+          - { name: linux-x86_64, runner: ubuntu-latest, target: x86_64, smoke: true }
+          - { name: linux-aarch64, runner: ubuntu-24.04-arm, target: aarch64, smoke: true }
+          - { name: macos-arm64, runner: macos-latest, target: aarch64, smoke: true }
+          - { name: macos-x86_64, runner: macos-latest, target: x86_64, smoke: false }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: bindings/python
+          target: ${{ matrix.platform.target }}
+          rust-toolchain: "1.97.1"
+          manylinux: auto
+          args: --release --out dist
+      - name: Smoke test the wheel
+        if: matrix.platform.smoke
+        shell: bash
+        run: |
+          python -m pip install --find-links bindings/python/dist --no-index babeldb
+          python -c "import babeldb, os, tempfile; d = os.path.join(tempfile.mkdtemp(), 'db'); db = babeldb.open(d); db.put('k', 'v'); assert db.get('k') == b'v'; db.close(); print('ok', babeldb.__version__)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-${{ matrix.platform.name }}
+          path: bindings/python/dist
+          if-no-files-found: error
+
+  sdist:
+    name: sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: bindings/python
+          command: sdist
+          rust-toolchain: "1.97.1"
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-sdist
+          path: bindings/python/dist
+          if-no-files-found: error
+
+  publish:
+    name: publish to PyPI
+    if: github.event_name == 'release'
+    needs: [wheels, sdist]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: python-*
+          merge-multiple: true
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist

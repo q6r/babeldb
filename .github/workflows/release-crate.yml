@@ -1,0 +1,30 @@
+name: Release (crate)
+
+# `cargo publish --dry-run` on every run (packages and compiles the crate the
+# way crates.io will); the real `cargo publish` only when a GitHub Release is
+# published. crates.io side: repository secret CARGO_REGISTRY_TOKEN.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: publish to crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain (rust-toolchain.toml)
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: Dry run
+        run: cargo publish --dry-run
+      - name: Publish
+        if: github.event_name == 'release'
+        run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

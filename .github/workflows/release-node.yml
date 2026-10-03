@@ -1,0 +1,86 @@
+name: Release (Node)
+
+# Builds the native addon for Windows x64, Linux x64/arm64 (glibc 2.17 via the
+# napi-rs cross toolchain) and macOS x64/arm64, then publishes one npm package
+# per platform (babeldb-<platform>) plus the main `babeldb` package, which
+# picks the right one at install time (optionalDependencies).
+# Publishing happens only when a GitHub Release is published; a manual run
+# only builds. npm side: repository secret NPM_TOKEN (granular token with
+# publish rights).
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: addon (${{ matrix.settings.target }})
+    runs-on: ${{ matrix.settings.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - { host: windows-latest, target: x86_64-pc-windows-msvc, flags: "" }
+          - { host: ubuntu-latest, target: x86_64-unknown-linux-gnu, flags: "--use-napi-cross" }
+          - { host: ubuntu-latest, target: aarch64-unknown-linux-gnu, flags: "--use-napi-cross" }
+          - { host: macos-latest, target: aarch64-apple-darwin, flags: "" }
+          - { host: macos-latest, target: x86_64-apple-darwin, flags: "" }
+    defaults:
+      run:
+        shell: bash
+        working-directory: bindings/node
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Toolchain (rust-toolchain.toml) and target
+        run: |
+          rustup show
+          rustup target add ${{ matrix.settings.target }}
+      - name: Build the addon
+        run: |
+          npm ci
+          npx napi build --platform --release --target ${{ matrix.settings.target }} ${{ matrix.settings.flags }}
+          ls -la *.node
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bindings-${{ matrix.settings.target }}
+          path: bindings/node/*.node
+          if-no-files-found: error
+
+  publish:
+    name: publish to npm
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        shell: bash
+        working-directory: bindings/node
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          path: bindings/node/artifacts
+      - name: Per-platform packages
+        run: |
+          npx napi create-npm-dirs
+          npx napi artifacts
+          ls npm/*
+      - name: Publish (platform packages first, then babeldb)
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
