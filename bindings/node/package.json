@@ -44,8 +44,7 @@
     "build": "napi build --platform --release",
     "build:debug": "napi build --platform",
     "test": "node --test __test__/babeldb.test.mjs",
-    "bench": "node bench.mjs",
-    "prepublishOnly": "napi prepublish -t npm"
+    "bench": "node bench.mjs"
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.10.5"

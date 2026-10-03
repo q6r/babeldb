@@ -1,17 +1,24 @@
 name: Release (Node)
 
 # Builds the native addon for Windows x64, Linux x64/arm64 (glibc 2.17 via the
-# napi-rs cross toolchain) and macOS x64/arm64, then publishes one npm package
-# per platform (babeldb-<platform>) plus the main `babeldb` package, which
-# picks the right one at install time (optionalDependencies).
-# Publishing happens only when a GitHub Release is published; a manual run
-# only builds. npm side: repository secret NPM_TOKEN (granular token with
-# publish rights).
+# napi-rs cross toolchain) and macOS x64/arm64, then publishes ONE npm package,
+# `babeldb`, holding every platform binary (index.js loads the local
+# babeldb.<platform>.node first). Separate per-platform packages
+# (babeldb-win32-x64-msvc, ...) were refused by npm's spam detection on the
+# first release (403, "Package name triggered spam detection").
+# Publishing happens when a GitHub Release is published, or on a manual run
+# with `publish` checked; otherwise a manual run only builds.
+# npm side: repository secret NPM_TOKEN (granular token with publish rights).
 
 on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to npm (otherwise build only)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -55,7 +62,7 @@ jobs:
 
   publish:
     name: publish to npm
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' || inputs.publish
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -75,12 +82,12 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: bindings/node/artifacts
-      - name: Per-platform packages
+      - name: Put every platform binary in the package
         run: |
-          npx napi create-npm-dirs
-          npx napi artifacts
-          ls npm/*
-      - name: Publish (platform packages first, then babeldb)
-        run: npm publish --access public --provenance
+          find artifacts -name 'babeldb.*.node' -exec mv {} . \;
+          ls -la *.node
+          test "$(ls *.node | wc -l)" -eq 5
+      - name: Publish babeldb (all platform binaries, no install scripts)
+        run: npm publish --access public --provenance --ignore-scripts
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
